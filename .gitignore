@@ -1,0 +1,54 @@
+# ---- OS / Editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+.cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+.python-version
+
+# ---- Env / Secrets
+.env
+.env.*
+!.env.example
+
+# ---- App data & exports
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+export/
+# keep folders but ignore contents
+!data/.gitkeep
+!export/.gitkeep
+
+# ---- Logs
+logs/
+*.log
+
+# ---- Node / Vite (frontend)
+web/node_modules/
+web/dist/
+web/.vite/
+web/.eslintcache
+web/coverage/
+**/*.tsbuildinfo
+
+# ---- Misc temp
+tmp/
+temp/
