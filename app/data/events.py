@@ -3,7 +3,10 @@
 import sqlite3, os, datetime as dt, json
 os.makedirs("data", exist_ok=True)
 _DB="data/events.db"
-def _conn(): return sqlite3.connect(_DB, check_same_thread=False)
+
+def _conn():
+    return sqlite3.connect(_DB, check_same_thread=False)
+
 
 def init_db():
     with _conn() as c:
@@ -28,9 +31,13 @@ def init_db():
         if "extra_json" not in cols:
             c.execute("ALTER TABLE events ADD COLUMN extra_json TEXT")
 
-def write_event(row:dict):
+
+def write_event(row: dict):
     """Insert a log row. Known columns go to dedicated fields; everything else is packed into extra_json."""
-    base_keys = {"ts_iso","request_id","status","model","tone","timezone","prompt_tokens","completion_tokens","cost_usd","cached"}
+    base_keys = {
+        "ts_iso","request_id","status","model","tone","timezone",
+        "prompt_tokens","completion_tokens","cost_usd","cached"
+    }
     ts_iso = row.get("ts_iso") or row.get("generated_at_iso") or dt.datetime.utcnow().isoformat()
     # Ensure tone is a plain string (handles Enum values)
     tone_val = row.get("tone")
@@ -59,8 +66,9 @@ def write_event(row:dict):
         )
         c.commit()
 
-def today_cost_sum()->float:
+
+def today_cost_sum() -> float:
     start = dt.datetime.utcnow().date().isoformat()
     with _conn() as c:
-        cur=c.execute("SELECT COALESCE(SUM(cost_usd),0) FROM events WHERE ts_iso LIKE ?", (f"{start}%",))
+        cur = c.execute("SELECT COALESCE(SUM(cost_usd),0) FROM events WHERE ts_iso LIKE ?", (f"{start}%",))
         return float(cur.fetchone()[0] or 0.0)

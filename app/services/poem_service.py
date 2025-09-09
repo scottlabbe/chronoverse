@@ -7,6 +7,7 @@ from app.core.config import Settings
 from app.core.types import Tone
 from app.adapters.registry import OpenAIAdapter, LLMResult
 from app.services import cache, pricing
+from app.services import micro_directives
 from app.data import events as ev
 
 log = logging.getLogger("poem")
@@ -14,9 +15,9 @@ log = logging.getLogger("poem")
 TONE_STYLE = {
   "Whimsical":"light, playful metaphors; gentle alliteration",
   "Stoic":"calm, restrained, simple diction",
-  "Wistful":"soft nostalgia; warm",
-  "Funny":"wry, clean humor; clean jokes only",
-  "Haiku":"3 lines, 5/7/5 syllables; seasonal hint",
+  "Wistful":"short, soft, nostalgia",
+  "Funny":"wry, amusing humor",
+  "Haiku":"write exactly 3 lines with 5/7/5 syllables inlcuding the time.",
   "Noir":"moody, cinematic; concrete imagery",
   "Minimal":"ultra-brief; no adjectives",
   "Cosmic":"space/time motifs; awe"
@@ -56,22 +57,26 @@ def daypart_for(local_dt: datetime) -> str:
         return "evening"
     return "late night"
 
-def make_prompt(time_used: str, tone: Tone, daypart: str) -> str:
+def make_prompt(time_used: str, tone: Tone, daypart: str, extra_hint: str | None = None) -> str:
     style = TONE_STYLE[tone]
     return (
-        "You are ChronoVerse's poet.\n"
+        "You are a Master Poet writing brief, time-aware poems.\n"
+        "<<RULES>>\n"
+        "- Write a short poem that includes the time exactly once.\n"
+        "- Write the time anywhere in the poem (number or english form).\n"
+        "- Length: ≤ 3 lines and <180 characters.\n"
+        "- Voice: punchy, fun, accessible; prefer concrete images and active verbs.\n"
+        "- Output the poem only.\n"
+        "- Mind the input but it's optional to include in poem text.\n"
+
         f"<<INPUT>>\n"
         f"time: {time_used}\n"
-        f"tone: {tone}\n"
         f"daypart: {daypart}\n"
+        f"tone: {tone}\n"
         f"style: {style}\n"
-        "<<RULES>>\n"
-        "- Write a short poem that includes the time above either in number form or in english.\n"
-        "- Length: under 3 lines. If tone == Haiku, write exactly 3 lines with 5/7/5 syllables.\n"
-        "- Keep it punchy, fun, and accessible.\n"
-        "- Do not mention time zones, cities, dates, or meridiem markers (AM/PM).\n"
-        "- No emojis, hashtags, titles, or preamble. Output the poem only.\n"
-        "<<OUTPUT>>\n"
+        + (f"{extra_hint}\n" if extra_hint else "")
+
+        + "<<OUTPUT>>\n"
     )
 
 def choose_model(cfg: Settings, req_id: str) -> str:
@@ -88,12 +93,14 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
 
     async def _call_model(adapter: OpenAIAdapter, model: str, prompt: str) -> LLMResult:
         # Adapter is model-aware and will omit unsupported params for GPT-5.
-        return await adapter.generate(model=model, prompt=prompt, max_tokens=150)
+        return await adapter.generate(model=model, prompt=prompt, max_tokens=500)
 
     req_id = f"cv_{uuid.uuid4().hex[:12]}"
     t_used = time_str(tz, "12h" if fmt not in ("12h","24h") else fmt)
     local_dt = datetime.now(ZoneInfo(tz))
     daypart = daypart_for(local_dt)
+    minute_of_day = local_dt.hour * 60 + local_dt.minute
+    extra_hint, directive_id = micro_directives.pick(minute_of_day, tone=str(tone), salt=req_id)
 
     # Budget check
     if ev.today_cost_sum() >= cfg.DAILY_COST_LIMIT_USD:
@@ -117,6 +124,8 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
             "daypart": daypart,
             "response_id": None,
             "latency_ms": None,
+            "directive_id": directive_id,
+            "extra_hint": extra_hint,
         }
         ev.write_event(payload)
         return payload
@@ -127,7 +136,7 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
         if cached: return {**cached, "cached":True}
 
     t_for_prompt = t_used.replace(" AM", "").replace(" PM", "").replace(" am", "").replace(" pm", "")
-    prompt = make_prompt(t_for_prompt, tone, daypart)
+    prompt = make_prompt(t_for_prompt, tone, daypart, extra_hint=extra_hint)
     model_for_user = choose_model(cfg, req_id)
 
     try:
@@ -154,6 +163,8 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
                 "daypart": daypart,
                 "response_id": getattr(res, "response_id", None),
                 "latency_ms": getattr(res, "latency_ms", None),
+                "directive_id": directive_id,
+                "extra_hint": extra_hint,
             }
             ev.write_event(fallback)
             log.warning("empty_poem_from_model model=%s req_id=%s", model_for_user, req_id)
@@ -182,6 +193,8 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
             "daypart": daypart,
             "response_id": getattr(res, "response_id", None),
             "latency_ms": getattr(res, "latency_ms", None),
+            "directive_id": directive_id,
+            "extra_hint": extra_hint,
         }
         if res.model == cfg.PRIMARY_MODEL and payload.get("status") == "ok":
             cache.set(cache_key, payload)
@@ -214,6 +227,8 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
                                 "daypart": daypart,
                                 "response_id": getattr(sres, "response_id", None),
                                 "latency_ms": getattr(sres, "latency_ms", None),
+                                "directive_id": directive_id,
+                                "extra_hint": extra_hint,
                             })
                         except Exception:
                             pass
@@ -244,6 +259,8 @@ async def generate_poem(cfg: Settings, adapter: OpenAIAdapter, tone: Tone, tz: s
             "daypart": daypart,
             "response_id": None,
             "latency_ms": None,
+            "directive_id": directive_id,
+            "extra_hint": extra_hint,
         }
         ev.write_event(fallback); log.exception("model_error: %s", e)
         return fallback

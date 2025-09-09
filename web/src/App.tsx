@@ -122,6 +122,10 @@ export default function App() {
   const themeButtonRef = useRef<HTMLButtonElement>(null);
   const poemRef = useRef<HTMLDivElement>(null);
 
+  // --- Presentation mode state & Wake Lock ---
+  const [isPresenting, setIsPresenting] = useState(false);
+  const wakeLockRef = useRef<any>(null);
+
   // --- Minute tick scheduler (default ON, pauses when hidden) ---
   const JITTER_MIN_MS = 250;
   const JITTER_MAX_MS = 500;
@@ -332,6 +336,109 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [isMenuOpen, isVersionMenuOpen, isThemeMenuOpen]);
 
+  // Fullscreen + presentation helpers
+  const requestWakeLock = async () => {
+    try {
+      // @ts-ignore
+      if (navigator?.wakeLock?.request) {
+        // @ts-ignore
+        const lock = await navigator.wakeLock.request('screen');
+        wakeLockRef.current = lock;
+        if (lock && typeof lock.addEventListener === 'function') {
+          lock.addEventListener('release', () => {
+            // no-op; we can re-acquire on visibilitychange
+          });
+        }
+      }
+    } catch {
+      // Ignore wake lock errors
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    try {
+      if (wakeLockRef.current && typeof wakeLockRef.current.release === 'function') {
+        await wakeLockRef.current.release();
+      }
+    } catch {
+      // ignore
+    } finally {
+      wakeLockRef.current = null;
+    }
+  };
+
+  const enterPresentation = async () => {
+    try {
+      document.body.classList.add('presenting');
+      setIsPresenting(true);
+      if (document.documentElement.requestFullscreen) {
+        try { await document.documentElement.requestFullscreen(); } catch { /* ignore */ }
+      }
+      await requestWakeLock();
+    } catch {
+      // ignore
+    }
+  };
+
+  const exitPresentation = async () => {
+    try {
+      if (document.fullscreenElement && document.exitFullscreen) {
+        try { await document.exitFullscreen(); } catch { /* ignore */ }
+      }
+    } finally {
+      document.body.classList.remove('presenting');
+      setIsPresenting(false);
+      await releaseWakeLock();
+    }
+  };
+
+  // Sync with native fullscreen changes (Esc, browser UI)
+  useEffect(() => {
+    const onFsChange = () => {
+      const fs = !!document.fullscreenElement;
+      if (!fs) {
+        // Exited fullscreen (via Esc or browser controls)
+        document.body.classList.remove('presenting');
+        setIsPresenting(false);
+        void releaseWakeLock();
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  // Re-acquire wake lock if needed when tab becomes visible
+  useEffect(() => {
+    const onVis = () => {
+      if (!document.hidden && isPresenting) {
+        void requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [isPresenting]);
+
+  // Keyboard shortcuts: F toggle fullscreen/presentation, N new poem, Esc exit
+  useEffect(() => {
+    const onKey = async (e: KeyboardEvent) => {
+      if (e.key === 'F' || e.key === 'f') {
+        e.preventDefault();
+        if (isPresenting) await exitPresentation(); else await enterPresentation();
+      } else if (e.key === 'Escape') {
+        if (isPresenting) {
+          e.preventDefault();
+          await exitPresentation();
+        }
+      } else if (e.key === 'N' || e.key === 'n') {
+        e.preventDefault();
+        setIsTransitioning(true);
+        await loadPoem(currentTone, true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isPresenting, currentTone]);
+
   // Theme-specific colors
   const getThemeColors = () => {
     switch (currentTheme) {
@@ -511,6 +618,22 @@ export default function App() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Presentation Toggle - Bottom left corner */}
+      <div className="fixed bottom-8 left-8">
+        <div className="relative">
+          <button
+            onClick={async () => { isPresenting ? await exitPresentation() : await enterPresentation(); }}
+            className={`transition-all duration-700 ease-out ${
+              showControls ? 'opacity-30 hover:opacity-60' : 'opacity-0 hover:opacity-30'
+            } text-xs tracking-wider lowercase`}
+            style={{ color: styles.colors.muted }}
+            aria-pressed={isPresenting}
+          >
+            {isPresenting ? 'exit' : 'present'}
+          </button>
         </div>
       </div>
 

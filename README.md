@@ -1,274 +1,379 @@
-Awesome—here’s a clear, comprehensive README you can drop in at the project root. It captures the important functions, DB, and overall structure, and it reflects the choices you’ve made (simple experiments, no extra telemetry stored, flexible time wording).
-
----
-
 # ChronoVerse
 
-A minimalist web app that serves a tiny poem about *now*. Each poem weaves the current time into <3 lines, with user-selectable tone and clean typography. Backend is FastAPI + OpenAI’s Responses API.
+Minimalist, living “time poems.” Each visit (or minute) generates a short poem that *includes the current time*, in a chosen tone, without AM/PM or timezone names. Built with FastAPI + Vite/React, powered by OpenAI GPT-5 models via the **Responses API**.
 
-## ✨ What it does
+## ✨ Highlights
 
-- Generates a short poem that includes the current time (digits or words).
-- Lets the caller choose a **tone** (Whimsical, Stoic, Wistful, Funny, Haiku, Noir, Minimal, Cosmic).
-- Supports multiple models (GPT-5 family and others).
-- Caches by **minute** to avoid duplicate calls.
-- Tracks cost and enforces a **daily budget cap**.
-- Returns a **graceful fallback poem** if a model call fails or returns empty.
-
----
-
-## 🧱 Architecture at a glance
-
-- **FastAPI** app with a small service layer (`poem_service.py`)
-- **Adapter** that’s *model-aware* (GPT-5 vs non-GPT-5) and calls the OpenAI **Responses API**
-- **Pricing** utility to compute cost from usage
-- **In-memory cache** with 60s freshness
-- **SQLite** for event logging (baseline fields only; you chose not to persist extra telemetry)
+- **Clean UI** with big type and optional fullscreen “presentation mode”
+- **Tones**: Whimsical, Stoic, Wistful, Funny, Haiku, Noir, Minimal, Cosmic
+- **Prompt rules**: must include clock time, under 3 lines, no AM/PM, no timezone, style follows chosen tone
+- **Daypart awareness**: early morning / morning / afternoon / evening / night / late night, injected as metadata (not literal AM/PM) to guide imagery
+- **Minute auto-refresh** (default **ON**): new poem each minute, with jitter, pauses when tab hidden
+- **Model switching**: `gpt-5`, `gpt-5-mini`, `gpt-5-nano`
+- **GPT-5 controls**: `text.verbosity`, `reasoning.effort` (Responses API)
+- **Caching**: in-memory, per minute+tone
+- **Logging**: SQLite events DB with full response snapshot in JSON for later analysis
+- **Swagger UI**: interactive testing at `/docs`
 
 ---
 
-## 📁 Directory layout (key files)
+## Project Structure
 
 ```
 chronoverse/
 ├─ app/
-│  ├─ main.py                     # FastAPI app & route wiring (/healthz, /api/poem)
-│  ├─ core/
-│  │  ├─ config.py                # .env loader (simple, robust)
-│  │  └─ types.py                 # Pydantic models (PoemRequest/PoemResponse, Tone enum)
+│  ├─ main.py                  # FastAPI app factory & CORS
+│  ├─ routes/
+│  │  └─ poems.py              # POST /api/poem
 │  ├─ services/
-│  │  ├─ poem_service.py          # time_str, make_prompt, choose_model, generate_poem
-│  │  ├─ pricing.py               # cost_usd(), price validation
-│  │  └─ cache.py                 # minute-level in-memory cache
+│  │  └─ poem_service.py       # prompt building, cache, orchestration, cost calc
 │  ├─ adapters/
-│  │  └─ registry.py              # OpenAIAdapter (Responses API, GPT-5 policy, extraction)
-│  └─ data/
-│     └─ events.py                # today_cost_sum(), write_event() → SQLite
-├─ data/
-│  └─ events.db                   # SQLite file (created at runtime)
-├─ .env                           # Project config (do not commit)
-├─ .env.example                   # Template for env vars
+│  │  └─ registry.py           # OpenAI adapter (Responses API) + robust text extraction
+│  ├─ core/
+│  │  └─ config.py             # pydantic-settings
+│  ├─ data/
+│  │  ├─ events.py             # SQLite writes, schema
+│  │  └─ events.db             # SQLite database (created at runtime)
+│  └─ types/
+│     └─ models.py             # Pydantic request/response types (PoemRequest/PoemResponse)
+├─ web/
+│  ├─ index.html
+│  ├─ vite.config.ts
+│  ├─ package.json
+│  └─ src/
+│     ├─ App.tsx               # UI, timer, fetch, tone selector, fullscreen button
+│     ├─ api.ts                # client fetcher for /api/poem
+│     └─ styles/
+│        └─ globals.css        # responsive typography, full-bleed layout
+├─ .env                        # environment variables (see below)
 ├─ requirements.txt
+├─ .gitignore
 └─ README.md
 ```
 
 ---
 
-## 🔑 Important modules & functions
+## Backend Overview
 
-### `app/services/poem_service.py`
-- `time_str(tz:str, fmt:str) -> str`  
-  Formats current time in the given IANA timezone (e.g., `America/Chicago`) as **24h** (`%H:%M`) or **12h** (`%-I:%M %p`, Windows-safe fallback). Used only to **compute** time; we strip AM/PM before prompting.
+### Endpoint
 
-- `make_prompt(time_used:str, tone:Tone) -> str`  
-  Structured, concise prompt (INPUT/RULES/OUTPUT). Key rules:
-  - Include the time **once**, number **or** words (your choice).
-  - Under 3 lines (Haiku: exactly 3 lines, 5/7/5).
-  - No time zones, cities, dates, AM/PM, emojis, titles; **poem only**.
+```
+POST /api/poem
+```
 
-- `choose_model(cfg:Settings, req_id:str) -> str`  
-  Routes requests based on experiment mode:
-  - `single`: always **PRIMARY_MODEL**  
-  - `ab`: `%` split to **SECONDARY_MODEL** (deterministic hash)  
-  - `shadow`: user still sees primary; others run in background (you’re not using this now)
+**Request body** (JSON):
+```json
+{
+  "tone": "Stoic",
+  "timezone": "America/Chicago",
+  "format": "12h",
+  "forceNew": true
+}
+```
 
-- `generate_poem(cfg, adapter, tone, tz, fmt, force_new, bg=None) -> dict`  
-  Orchestrates:
-  1) Budget guard via `today_cost_sum()`  
-  2) Minute cache (primary responses only; bypass with `forceNew=true`)  
-  3) Prompt build (strips AM/PM before prompting)  
-  4) Calls adapter; if **text is empty**, returns fallback poem (no crash)  
-  5) Computes cost via `pricing.cost_usd()`  
-  6) Writes a baseline event (you’re not persisting extra telemetry; see DB section)
+- `tone`: one of: Whimsical | Stoic | Wistful | Funny | Haiku | Noir | Minimal | Cosmic
+- `timezone`: IANA tz string; we **do not** include timezone name in the poem
+- `format`: "12h" or "24h"; the prompt logic **strips AM/PM** before sending to the model
+- `forceNew`: skip cache for a fresh generation
 
-### `app/adapters/registry.py`
-- `OpenAIAdapter.generate(model, prompt, max_tokens)`  
-  - **GPT-5 family** (`gpt-5*`):
-    - Uses **Responses API** with `max_output_tokens`.
-    - Sends `text={"format":{"type":"text"},"verbosity":ENV}` and `reasoning={"effort":ENV}`.
-    - **Does not** send `temperature` (unsupported).
-  - **Non-GPT-5** (e.g., `gpt-4o-mini`): uses classic sampling (temperature allowed).
-  - One-shot retry if the API complains about an unsupported parameter.
-  - Extracts text safely (prefers `output_text`, otherwise walks `output → content → text`).
-  - Returns token usage; the service handles cost & caching.
+**Response**:
+```json
+{
+  "poem": "…",
+  "model": "gpt-5-nano",
+  "generated_at_iso": "2025-09-01T12:39:34.657032+00:00",
+  "time_used": "7:39",
+  "timezone": "America/Chicago",
+  "tone": "Stoic",
+  "daypart": "early morning",
+  "cached": false,
+  "status": "ok",
+  "prompt_tokens": 146,
+  "completion_tokens": 41,
+  "reasoning_tokens": 0,
+  "cost_usd": 0.000024,
+  "request_id": "cv_xxx",
+  "response_id": "resp_xxx",
+  "retry_count": 0,
+  "params_used": { "verbosity": "low", "reasoning_effort": "minimal" },
+  "latency_ms": 2081
+}
+```
 
-### `app/services/pricing.py`
-- Computes **cost (USD)** from `usage` and your price map.
-- Supports hyphenated or ENV_SAFE price keys (e.g., `PRICE_PROMPT_gpt-5` or `PRICE_PROMPT_GPT_5`).
+### Prompting rules (summary)
 
-### `app/data/events.py`
-- `today_cost_sum()` sums costs for the current UTC day to enforce `DAILY_COST_LIMIT_USD`.
-- `write_event(payload)` inserts into SQLite; unknown keys can be ignored depending on implementation (we’re using baseline fields only).
+- “You are a master poet… under 3 lines… include the clock time…”  
+- **No AM/PM** (we pre-strip it from `time_used` and instruct the model not to add it)
+- **No timezone names**
+- Style follows `tone`, with a compact “style requirements” hint
+- `daypart` is provided as **metadata** to steer imagery without leaking AM/PM
+
+### Models & Responses API parameters
+
+- **GPT-5 only**: `model: gpt-5 | gpt-5-mini | gpt-5-nano`
+- **Use** `responses.create` with:
+  - `input`: prompt string
+  - `max_output_tokens`: cap for generated text
+  - `text`: `{ format: { type: "text" }, verbosity: "low|medium|high" }`
+  - `reasoning`: `{ effort: "minimal|low|medium|high" }`
+- **Do NOT** send `temperature` to GPT-5 models (not supported with Responses API).
+- We default to `verbosity=low`, `reasoning_effort=minimal` for speed & succinctness (tunable via env).
+
+### Robust text extraction (important)
+
+GPT-5 responses sometimes return:
+- a **“reasoning”** output item (with `summary`) and
+- a **“message”** item (with `content[*].text`)
+
+We:
+1) Try `response.output_text` (SDK convenience).  
+2) Then scan each `output` item:
+   - Item-level `output_text` / `text`
+   - **Item-level `summary`** (supports both dict **and list** shapes)
+   - `message.content[*].text` or blocks with `text.value`
+   - Fallback: scan `content[*]` for `output_text`/`text`/`value`
+3) If all else fails and a `reasoning.summary` has text, we can use it as a last resort.
+
+Enable `ADAPTER_DEBUG=1` to log a compact structural peek so you can see exactly where the text lives.
 
 ---
 
-## ⚙️ Setup & run
+## Frontend Overview
 
-**Requirements**: Python 3.12+
+- **Vite + React (TypeScript)**
+- `App.tsx` renders the poem, tone selector, daypart display, and a **Fullscreen** button
+- **Minute auto-refresh (default ON)**:
+  - Schedules next fetch aligned to the next minute with a small jitter (to avoid thundering herd)
+  - Uses Page Visibility API: pauses updates when tab is hidden; resumes when visible
+- Responsive typography; layout expands to **full viewport height** (`100svh`) and supports presentation-like fullscreen
+
+---
+
+## Environment Setup
+
+### Python
 
 ```bash
-# from project root
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\\Scripts\\activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# copy and edit env
-cp .env.example .env
-# put your actual OPENAI_API_KEY=... and other values
-
-# run
 uvicorn app.main:app --reload
-# docs: http://127.0.0.1:8000/docs
+# Swagger UI:
+# http://127.0.0.1:8000/docs
 ```
+
+### Node (frontend)
+
+Use a platform-agnostic setup (avoid platform-specific devDependencies like `@rollup/rollup-darwin-arm64`).
+
+```bash
+cd web
+npm install
+npm run dev
+# Dev server will print a local URL
+```
+
+**Tip (Apple Silicon + Linux mixed dev environments):**  
+If a previous `package.json` contained platform-specific packages (e.g., `@rollup/rollup-darwin-arm64`), remove them and reinstall. Keep `devDependencies` generic (vite, @vitejs/plugin-react, typescript, etc.).
 
 ---
 
-## 🧩 Configuration (.env)
+## .env (example)
 
-Required:
-```
+> **Important:** For list fields, use comma-separated **or** valid JSON arrays with quoted strings.
+
+```dotenv
+# Required
 OPENAI_API_KEY=sk-...
-```
 
-Models & experiments:
-```
-PRIMARY_MODEL=gpt-5
+# Which model users see by default
+PRIMARY_MODEL=gpt-5-nano
+
+# Optional (A/B or shadow infra exists, but you can keep single)
 SECONDARY_MODEL=gpt-5-mini
-TERTIARY_MODEL=gpt-5-nano
+TERTIARY_MODEL=gpt-5
 
-EXPERIMENT_MODE=single      # single | ab | shadow
-AB_SPLIT=20                 # % to SECONDARY when mode=ab
-SHADOW_TARGETS=["gpt-5-mini","gpt-5-nano"]   # only used if mode=shadow
-```
+# Experiment mode: single | ab | shadow
+EXPERIMENT_MODE=single
+AB_SPLIT=20
 
-Model controls (GPT-5 family):
-```
-VERBOSITY=low               # low | medium | high
-REASONING_EFFORT=minimal    # minimal | low | medium | high
-MAX_OUTPUT_TOKENS=128       # recommended floor for reasoning models
-```
+# Shadow targets; use CSV or valid JSON with quotes
+# CSV:
+SHADOW_TARGETS=gpt-5-mini,gpt-5-nano
+# OR JSON:
+# SHADOW_TARGETS=["gpt-5-mini","gpt-5-nano"]
 
-App:
-```
+# Safety
 DAILY_COST_LIMIT_USD=0.50
-CORS_ORIGINS=["*"]          # tighten for production
-```
+CORS_ORIGINS=*
 
-Pricing (per 1M tokens):
-```
+# GPT-5 Responses API controls (strings)
+VERBOSITY=low            # low | medium | high
+REASONING_EFFORT=minimal # minimal | low | medium | high
+
+# Pricing (per-1K tokens) — set to current rates from OpenAI pricing page
 PRICE_PROMPT_gpt-5=1.25
 PRICE_COMPLETION_gpt-5=10.00
+
 PRICE_PROMPT_gpt-5-mini=0.25
 PRICE_COMPLETION_gpt-5-mini=2.00
+
 PRICE_PROMPT_gpt-5-nano=0.05
 PRICE_COMPLETION_gpt-5-nano=0.40
 ```
 
-> **Dotenv tips:** one `KEY=VALUE` per line; JSON arrays must be quoted (`["*"]`); no inline comments.
+> **Note:** Our settings loader ignores unknown keys so these `PRICE_*` entries don’t break validation.  
+> For `SHADOW_TARGETS`, avoid invalid JSON like `[gpt-5-mini,gpt-5-nano]` (quotes required). CSV is easiest.
 
 ---
 
-## 🔌 API
+## Caching
 
-### `GET /healthz`
-- Returns: `{"ok": true}`
+- In-memory Python dict keyed by `minute + tone` (e.g., `08:18_stoic`)
+- TTL ~60s; we clear each minute to ensure freshness
+- `forceNew=true` bypasses cache
 
-### `POST /api/poem`
-**Body**
-```json
-{
-  "tone": "Stoic",                // one of Tone enum
-  "timezone": "America/Chicago",  // IANA tz name (used only for computing local time)
-  "format": "12h",                // "12h" or "24h"
-  "forceNew": true                // bypass minute cache
-}
+---
+
+## Events Database (SQLite)
+
+**Location:** `data/events.db`  
+**Schema:**
+```sql
+CREATE TABLE events(
+  ts_iso TEXT,
+  request_id TEXT,
+  status TEXT,              -- ok | fallback | shadow (if enabled)
+  model TEXT,
+  tone TEXT,
+  timezone TEXT,
+  prompt_tokens INT,
+  completion_tokens INT,
+  cost_usd REAL,
+  cached INT,               -- 0/1
+  extra_json TEXT           -- full response snapshot (poem, response_id, latency_ms, params_used, daypart, etc.)
+);
 ```
 
-**Response (fields you’ll see)**
-```json
-{
-  "poem": "…",
-  "model": "gpt-5",
-  "generated_at_iso": "2025-08-30T16:20:20.773Z",
-  "time_used": "10:20 AM",         // what the UI should display
-  "tone": "Stoic",
-  "cached": false,
-  "status": "ok",                  // or "fallback"
-  "prompt_tokens": 45,
-  "completion_tokens": 22,
-  "cost_usd": 0.0005,
-  "request_id": "cv_ab12cd34ef56",
-  "timezone": "America/Chicago"
-  // telemetry exists in-memory but you're not persisting extra fields to DB
-}
-```
-
-**Try it out**: `http://127.0.0.1:8000/docs` (Swagger UI)
-
-**Curl example**
+**Export to CSV (full):**
 ```bash
-curl -s http://127.0.0.1:8000/api/poem \
-  -H "Content-Type: application/json" \
-  -d '{"tone":"Stoic","timezone":"America/Chicago","format":"12h","forceNew":true}'
+sqlite3 -header -csv data/events.db "
+SELECT
+  ts_iso,
+  request_id,
+  status,
+  model,
+  tone,
+  timezone,
+  cached,
+  prompt_tokens,
+  completion_tokens,
+  cost_usd,
+  json_extract(extra_json,'$.poem')        AS poem,
+  json_extract(extra_json,'$.daypart')     AS daypart,
+  json_extract(extra_json,'$.response_id') AS response_id,
+  json_extract(extra_json,'$.latency_ms')  AS latency_ms
+FROM events
+ORDER BY ts_iso;
+" > export/poems_full.csv
+```
+
+**Quick counts & peek:**
+```bash
+sqlite3 data/events.db "SELECT COUNT(*) FROM events;"
+sqlite3 data/events.db "SELECT ts_iso,status,model,cached,substr(extra_json,1,160) FROM events ORDER BY rowid DESC LIMIT 5;"
 ```
 
 ---
 
-## 🧠 Prompting behavior (what the model sees)
+## Using the API
 
-- Structured prompt with clear sections (INPUT → RULES → OUTPUT).
-- Time is passed **without** AM/PM (we strip meridiem).
-- The poem must include the time **once**, and can use digits **or** words (your preference).
-- No time zones, cities, dates, emojis, or titles.
+**cURL:**
+```bash
+curl -s -X POST 'http://127.0.0.1:8000/api/poem' \
+  -H 'Content-Type: application/json' \
+  -d '{"tone":"Stoic","timezone":"America/Chicago","format":"12h","forceNew":true}' | jq .
+```
 
----
-
-## 🧮 Caching & cost
-
-- **Cache**: in-memory, 60-second freshness; key includes the **minute**, `tz`, `tone`, and **PRIMARY_MODEL**. Only **primary** success responses are cached. Use `"forceNew": true` to bypass.
-- **Cost**: computed from `usage` and `.env` prices; `DAILY_COST_LIMIT_USD` enforces a hard cap and returns the fallback poem when exceeded.
+**Swagger:**  
+Open `http://127.0.0.1:8000/docs` and use the `POST /api/poem` operation interactively.
 
 ---
 
-## 🗃️ Database (events)
+## Switching Models
 
-- SQLite at `data/events.db`
-- **Baseline** fields (typical row):  
-  `ts_iso` (write time), `request_id`, `status` (“ok”/“fallback”/“shadow”),  
-  `model`, `tone`, `timezone`, `prompt_tokens`, `completion_tokens`, `cost_usd`, `cached`.
-
-> You chose **not to persist extra telemetry** (like `retry_count`, `params_used`, `reasoning_tokens`) for now. The writer will ignore unknown keys or you can trim before calling `write_event()`.
-
----
-
-## 🧪 Experiments (optional)
-
-- `single`: always **PRIMARY_MODEL** (recommended now).
-- `ab`: route a % of requests to **SECONDARY_MODEL** (`AB_SPLIT`).
-- `shadow`: users see **PRIMARY_MODEL**; other models run in background for logging/analysis.
+Edit `.env`:
+```
+PRIMARY_MODEL=gpt-5-mini   # or gpt-5, gpt-5-nano
+```
+Then restart the server. To ensure you bypass cache, hit the API with `"forceNew": true` and check the `"model"` in the response.
 
 ---
 
-## 🛠 Troubleshooting
+## Fullscreen / Presentation Mode
 
-- **400: Unsupported parameter `temperature`** (GPT-5)  
-  → Adapter already avoids `temperature` for GPT-5. If you switch to a classic model, it’s allowed.
-
-- **`python-dotenv could not parse …`**  
-  → `.env` must be strict `KEY=VALUE`, JSON arrays quoted, no inline comments.
-
-- **`{"detail":"Not Found"}` at `/`**  
-  → Expected. We didn’t build a homepage; use `/docs` or `/api/poem`.
-
-- **Empty poem after 200 OK**  
-  → We request `text.format=type=text` and have a safety net; if it ever happens, you’ll get the fallback poem (no crash). Consider `MAX_OUTPUT_TOKENS>=128`.
+- The UI uses `100svh` and responsive type
+- A **Fullscreen** button requests the browser fullscreen API
+- Escape or browser UI exits fullscreen
 
 ---
 
-## 🚀 Deploy notes
+## Troubleshooting
 
-- Never commit `.env`. Use `.env.example` as a template.
-- Set `CORS_ORIGINS` appropriately before sharing publicly.
-- Consider pinning `openai` to a recent stable in `requirements.txt` to avoid SDK shape regressions.
+- **500 with “Unsupported parameter: temperature”:**  
+  Don’t send `temperature` to GPT-5 via Responses API. Our adapter gates it automatically.
+- **Empty poem / only reasoning item in output:**  
+  Increase `max_output_tokens` (e.g., 150–200), and set `REASONING_EFFORT=minimal`.  
+  Enable `ADAPTER_DEBUG=1` to print a structured peek; we parse item `summary` (dict or list) and `content` blocks.
+- **dotenv parse errors:**  
+  Lists must be CSV (`a,b,c`) **or** valid JSON with quotes (`["a","b","c"]`).  
+  Avoid `[a,b]` (invalid JSON).
+- **Vite/rollup platform errors:**  
+  Remove platform-specific devDependencies (e.g., `@rollup/rollup-darwin-arm64`). Reinstall with generic deps.  
+  Use Node LTS (v20+). `npm cache clean --force && rm -rf node_modules package-lock.json && npm install`.
+- **404 at `/`:**  
+  Backend serves only API; frontend runs on Vite dev server. In prod, serve the frontend statics or proxy.
 
 ---
+
+## Git & .gitignore
+
+Example `.gitignore` (already included):
+```
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+web/node_modules/
+web/.vite/
+web/dist/
+
+# Env & data
+.env
+data/*.db
+export/
+
+# OS / editor
+.DS_Store
+.vscode/
+```
+
+**Create repo & push:**
+```bash
+git init
+git add .
+git commit -m "Initial ChronoVerse"
+git branch -M main
+git remote add origin git@github.com:scottlabbe/chronoverse.git
+git push -u origin main
+```
+
+---
+
+## Deployment
+
+- **Replit / simple VM**: run FastAPI with `uvicorn`, host frontend as static build or keep Vite dev server behind a reverse proxy for local
+- Ensure `OPENAI_API_KEY` & other envs are set securely
+- Consider a small process manager (e.g., `pm2`, `systemd`) for `uvicorn`
