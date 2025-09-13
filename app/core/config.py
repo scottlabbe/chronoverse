@@ -1,5 +1,6 @@
 # app/core/config.py
-import os, json
+import os
+import json
 from dataclasses import dataclass, field
 from typing import List
 from dotenv import load_dotenv
@@ -7,9 +8,11 @@ from dotenv import load_dotenv
 # Load .env into process environment early
 load_dotenv()
 
+
 def _get(name: str, default: str | None = None) -> str | None:
     v = os.getenv(name)
     return v if v is not None else default
+
 
 def _get_list(name: str, default_list: List[str]) -> List[str]:
     raw = os.getenv(name)
@@ -27,17 +30,21 @@ def _get_list(name: str, default_list: List[str]) -> List[str]:
     # Fallback to CSV
     return [x.strip() for x in s.split(",") if x.strip()]
 
+
 @dataclass(frozen=True)
 class Settings:
     OPENAI_API_KEY: str
     PRIMARY_MODEL: str = "gpt-5"
     SECONDARY_MODEL: str = "gpt-5-mini"
     TERTIARY_MODEL: str = "gpt-5-nano"
-    EXPERIMENT_MODE: str = "single"   # single | ab | shadow
+    EXPERIMENT_MODE: str = "single"  # single | ab | shadow
     AB_SPLIT: int = 20
     SHADOW_TARGETS: List[str] = field(default_factory=list)
     DAILY_COST_LIMIT_USD: float = 0.5
     CORS_ORIGINS: List[str] = field(default_factory=lambda: ["*"])
+    FREE_MINUTES: int = 180
+    UPGRADE_PATH: str = "/api/billing/checkout"
+
 
 def get_settings() -> Settings:
     key = _get("OPENAI_API_KEY")
@@ -51,6 +58,13 @@ def get_settings() -> Settings:
         daily_cap = float(_get("DAILY_COST_LIMIT_USD", "0.5") or 0.5)
     except Exception:
         daily_cap = 0.5
+    try:
+        free_minutes = int(float(_get("FREE_MINUTES", "180") or 180))
+    except Exception:
+        free_minutes = 180
+    upgrade_path = (
+        _get("UPGRADE_PATH", "/api/billing/checkout") or "/api/billing/checkout"
+    ).strip()
 
     return Settings(
         OPENAI_API_KEY=key.strip(),
@@ -61,5 +75,7 @@ def get_settings() -> Settings:
         AB_SPLIT=ab_split,
         SHADOW_TARGETS=_get_list("SHADOW_TARGETS", []),
         DAILY_COST_LIMIT_USD=daily_cap,
-        CORS_ORIGINS=_get_list("CORS_ORIGINS", ["*"])
+        CORS_ORIGINS=_get_list("CORS_ORIGINS", ["*"]),
+        FREE_MINUTES=free_minutes,
+        UPGRADE_PATH=upgrade_path,
     )

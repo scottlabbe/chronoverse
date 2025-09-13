@@ -1,5 +1,3 @@
-
-
 # app/services/micro_directives.py
 # Purpose: pick ONE tiny, positive micro-directive per poem to keep output fresh.
 # Keep the core prompt stable; inject exactly one directive sentence selected here.
@@ -24,30 +22,106 @@ __all__ = [
 # ---------------------------
 # Tip: when this gets large, move to YAML and hydrate here.
 PLACES = [
-    "beach dune", "bus-stop bench", "rooftop edge", "diner booth", "ferry deck",
-    "library", "alley loading dock", "parking lot median", "laundromat aisle", 
-    "under a tree","train platform","underpass","porch steps","fire escape", "office break room","waiting room",
-    "hospital corridor","airport gate","bodega aisle","bridge","drive-thru lane",
-    "vacant lot","motel balcony","bus shelter","subway car","skate-park edge",
-    "school bleachers","cemetery path","farmers-market","river levee","diner counter",
-    "porch swing","front stoop"
+    "beach dune",
+    "bus-stop bench",
+    "rooftop edge",
+    "diner booth",
+    "ferry deck",
+    "library",
+    "alley loading dock",
+    "parking lot median",
+    "laundromat aisle",
+    "under a tree",
+    "train platform",
+    "underpass",
+    "porch steps",
+    "fire escape",
+    "office break room",
+    "waiting room",
+    "hospital corridor",
+    "airport gate",
+    "bodega aisle",
+    "bridge",
+    "drive-thru lane",
+    "vacant lot",
+    "motel balcony",
+    "bus shelter",
+    "subway car",
+    "skate-park edge",
+    "school bleachers",
+    "cemetery path",
+    "farmers-market",
+    "river levee",
+    "diner counter",
+    "porch swing",
+    "front stoop",
 ]
 
-COLORS = ["indigo", "ochre", "rust", "lilac", "cobalt", "sage", "marigold", "teal"
-          "ivory","amber","coral","mint","mauve","navy","slate","rose","burgundy",
-          "forest","mustard"
+COLORS = [
+    "indigo",
+    "ochre",
+    "rust",
+    "lilac",
+    "cobalt",
+    "sage",
+    "marigold",
+    "teal" "ivory",
+    "amber",
+    "coral",
+    "mint",
+    "mauve",
+    "navy",
+    "slate",
+    "rose",
+    "burgundy",
+    "forest",
+    "mustard",
 ]
 
-MOTION_VERBS = ["drift", "swerve", "scuff", "shuffle", "jolt", "shiver","sidle",
-                "veer","tilt","stall","skid","skim","glide","creep","amble","lurch",
-                "tremble","quiver","teeter","wobble","pivot","dart","slip","bob"]
+MOTION_VERBS = [
+    "drift",
+    "swerve",
+    "scuff",
+    "shuffle",
+    "jolt",
+    "shiver",
+    "sidle",
+    "veer",
+    "tilt",
+    "stall",
+    "skid",
+    "skim",
+    "glide",
+    "creep",
+    "amble",
+    "lurch",
+    "tremble",
+    "quiver",
+    "teeter",
+    "wobble",
+    "pivot",
+    "dart",
+    "slip",
+    "bob",
+]
 
 MATERIALS = [
-    "tin", "denim", "plywood", "basalt", "vinyl", "rebar", "terracotta", "cork", "graphite",
+    "tin",
+    "denim",
+    "plywood",
+    "basalt",
+    "vinyl",
+    "rebar",
+    "terracotta",
+    "cork",
+    "graphite",
 ]
 
 VOICES = [
-    "second person ('you')", "first plural ('we')", "overheard dialogue", "note-to-self",
+    "second person ('you')",
+    "first plural ('we')",
+    "overheard dialogue",
+    "note-to-self",
 ]
 
 FORMS = [
@@ -58,14 +132,24 @@ FORMS = [
     "one long line (≤180 chars)",
     "two sentences; second begins 'but'",
     "question-only (≤80 chars)",
-    "abecedarian fragment (A,B)"
+    "abecedarian fragment (A,B)",
 ]
 
 LIGHT_WEATHER = [
-    "sodium light", "neon wash", "dawn-blue", "rain mist", "heat shimmer", "fog halo", 
-    "flickering fluorescent","overcast glare","TV blue","siren flash","snow glow","smoke haze",
-    
+    "sodium light",
+    "neon wash",
+    "dawn-blue",
+    "rain mist",
+    "heat shimmer",
+    "fog halo",
+    "flickering fluorescent",
+    "overcast glare",
+    "TV blue",
+    "siren flash",
+    "snow glow",
+    "smoke haze",
 ]
+
 
 # ---------------------------------
 # Directive template & registrations
@@ -76,17 +160,34 @@ class Directive:
     render: Callable[[], str]
     allow_tones: Optional[set[str]] = None  # if provided, only active for these tones
 
+
 # Helper: choose one item (you can seed RNG externally for test determinism)
-choose = lambda seq: random.choice(seq)
+def choose(seq):
+    return random.choice(seq)
+
 
 DIRECTIVES: list[Directive] = [
-    Directive("place",      lambda: f"For this poem only: set it at a {choose(PLACES)}."),
-    Directive("color",      lambda: f"For this poem only: include exactly one color word: {choose(COLORS)}."),
-    Directive("material",   lambda: f"For this poem only: include the word '{choose(MATERIALS)}' once."),
-    Directive("motionverb", lambda: f"For this poem only: use one present-tense motion verb: {choose(MOTION_VERBS)}."),
-    Directive("light",      lambda: f"For this poem only: mention the light/weather once ({choose(LIGHT_WEATHER)})."),
-    Directive("voice",      lambda: f"For this poem only: write in {choose(VOICES)}."),
-    Directive("form",       lambda: f"For this poem only: form = {choose(FORMS)}.", allow_tones=None),
+    Directive("place", lambda: f"For this poem only: set it at a {choose(PLACES)}."),
+    Directive(
+        "color",
+        lambda: f"For this poem only: include exactly one color word: {choose(COLORS)}.",
+    ),
+    Directive(
+        "material",
+        lambda: f"For this poem only: include the word '{choose(MATERIALS)}' once.",
+    ),
+    Directive(
+        "motionverb",
+        lambda: f"For this poem only: use one present-tense motion verb: {choose(MOTION_VERBS)}.",
+    ),
+    Directive(
+        "light",
+        lambda: f"For this poem only: mention the light/weather once ({choose(LIGHT_WEATHER)}).",
+    ),
+    Directive("voice", lambda: f"For this poem only: write in {choose(VOICES)}."),
+    Directive(
+        "form", lambda: f"For this poem only: form = {choose(FORMS)}.", allow_tones=None
+    ),
 ]
 
 # -------------------------------------------------
@@ -94,8 +195,21 @@ DIRECTIVES: list[Directive] = [
 # -------------------------------------------------
 # You can add more bucket names now and map them later as banks grow.
 BUCKET_ORDER = [
-    "place", "sensory", "object", "motionverb", "light", "voice", "form",
-    "material", "color", "geography", "figurative", "lens", "microbeat", "sound", "digit",
+    "place",
+    "sensory",
+    "object",
+    "motionverb",
+    "light",
+    "voice",
+    "form",
+    "material",
+    "color",
+    "geography",
+    "figurative",
+    "lens",
+    "microbeat",
+    "sound",
+    "digit",
 ]
 
 # Map bucket→available directive IDs. Start minimal; expand anytime.
@@ -118,6 +232,7 @@ _recent_ids: deque[str] = deque(maxlen=64)
 # -----------------
 # Picking utilities
 # -----------------
+
 
 def _hash_choice(seq: Iterable, salt: str) -> object:
     """Deterministically pick an element from a sequence using a salt.
@@ -147,14 +262,19 @@ def pick(minute_of_day: int, tone: str, salt: Optional[str] = None) -> Tuple[str
 
     # 2) Gather candidates for this bucket and tone
     candidates = [
-        d for d in DIRECTIVES
+        d
+        for d in DIRECTIVES
         if d.id in BUCKET_MAP.get(bucket, [])
         and (d.allow_tones is None or tone in d.allow_tones)
     ]
 
     # 3) Fallback if bucket not populated yet
     if not candidates:
-        candidates = [d for d in DIRECTIVES if (d.allow_tones is None or tone in (d.allow_tones or set()))]
+        candidates = [
+            d
+            for d in DIRECTIVES
+            if (d.allow_tones is None or tone in (d.allow_tones or set()))
+        ]
 
     # 4) Avoid immediate repeats by id (light touch)
     def _pick_one() -> Directive:
@@ -175,9 +295,11 @@ def pick(minute_of_day: int, tone: str, salt: Optional[str] = None) -> Tuple[str
     _recent_ids.append(d.id)
     return (d.render(), d.id)
 
+
 # -----------------------
 # Testing/maintenance aids
 # -----------------------
+
 
 def _reset_recent() -> None:
     """Clear recent-memory (useful for tests)."""

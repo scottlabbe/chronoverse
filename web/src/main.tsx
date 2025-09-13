@@ -1,10 +1,22 @@
-import React from "react";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import App from "./App";
+import Home from "./pages/Home";
+import "./index.css";
+import "./styles/globals.css";  
 
-  import { createRoot } from "react-dom/client";
-  import App from "./App.tsx";
-  import "./index.css";
+const el = document.getElementById("root");
+if (!el) throw new Error("Root element #root not found");
 
-  const el = document.getElementById("root");
-  if (!el) throw new Error("Root element #root not found");
-  createRoot(el).render(<App />);
-  
+createRoot(el).render(
+  <StrictMode>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/app" element={<App />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  </StrictMode>
+);

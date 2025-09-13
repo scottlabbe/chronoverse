@@ -4,7 +4,28 @@
 // Therefore, let VITE_API_BASE point to the API root (default '/api'),
 // and append endpoint-specific paths (e.g., '/poem').
 
+import { supabase } from "./supabase";
+
 const base = ((import.meta as any).env?.VITE_API_BASE ?? '/api').replace(/\/$/, '');
+
+async function apiFetch(path: string, init: RequestInit = {}) {
+  const auth = await authHeader();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(init.headers || {}),
+    ...auth,
+  } as Record<string, string>;
+  return fetch(`${base}${path}`, { ...init, headers });
+}
+
+async function authHeader() {
+  const { data } = await supabase.auth.getSession();
+  const t = data.session?.access_token;
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+export type CheckoutResponse = { url: string };
+export type MeResponse = { userId?: string; email?: string; subscribed: boolean };
 
 export type PoemRequest = {
   tone: string;
@@ -30,22 +51,23 @@ export type PoemResponse = {
 };
 
 export async function getPoem(body: PoemRequest): Promise<PoemResponse> {
-  const url = `${base}/poem`;
-  const res = await fetch(url, {
+  const res = await apiFetch('/poem', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ forceNew: true, ...body }),
   });
-
   if (!res.ok) {
-    // Try to surface a helpful error message
     let msg = `${res.status} ${res.statusText}`;
-    try {
-      const t = await res.text();
-      msg = t || msg;
-    } catch {}
+    try { msg = (await res.text()) || msg; } catch {}
     throw new Error(`ChronoVerse API error: ${msg}`);
   }
+  return res.json();
+}
 
+export async function createCheckout(): Promise<CheckoutResponse> {
+  const res = await apiFetch('/billing/checkout', { method: 'POST' });
+  return res.json();
+}
+export async function me(): Promise<MeResponse> {
+  const res = await apiFetch('/me', { method: 'GET' });
   return res.json();
 }

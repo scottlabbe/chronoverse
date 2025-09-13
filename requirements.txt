@@ -5,3 +5,9 @@ pydantic-settings
 openai
 python-dotenv
 cachetools
+pyjwt[crypto]==2.8.0
+httpx>=0.27
+
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.1

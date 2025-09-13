@@ -1,74 +1,354 @@
-# Tiny SQLite logger: events(ts_iso TEXT, request_id TEXT, status TEXT, model TEXT, tone TEXT,
-#                           timezone TEXT, prompt_tokens INT, completion_tokens INT, cost_usd REAL, cached INT, extra_json TEXT)
-import sqlite3, os, datetime as dt, json
-os.makedirs("data", exist_ok=True)
-_DB="data/events.db"
+# Events & usage logging (SQLite-first, Postgres-ready)
+# Tables:
+#   events(
+#     ts_iso TEXT NOT NULL,
+#     request_id TEXT,
+#     status TEXT,
+#     model TEXT,
+#     tone TEXT,
+#     timezone TEXT,
+#     prompt_tokens INT,
+#     completion_tokens INT,
+#     cost_usd REAL,
+#     cached INT,
+#     user_id TEXT,
+#     auth_provider_id TEXT,
+#     session_id TEXT,
+#     minute_bucket TEXT,
+#     latency_ms INT,
+#     idempotency_key TEXT,
+#     extra_json TEXT
+#   )
+#   usage_events(
+#     user_id TEXT NOT NULL,
+#     minute_bucket TEXT NOT NULL,
+#     request_id TEXT,
+#     PRIMARY KEY(user_id, minute_bucket)
+#   )
+import sqlite3
+import os
+import datetime as dt
+import json
+import time
+import threading
+from typing import Optional
+from sqlalchemy import text
+from app.db import engine, is_postgres
+
+# ---- Helpers & module state ----
+_INIT_LOCK = threading.Lock()
+
+
+def _utc_now_iso() -> str:
+    """UTC timestamp, second precision, with trailing 'Z'."""
+    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _ensure_pragmas(c: sqlite3.Connection) -> None:
+    """Light tuning to reduce 'database is locked' and improve durability."""
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA busy_timeout=5000")  # 5s busy timeout across writers
+    except Exception:
+        pass
+
+
+def _execute_retry(
+    c: sqlite3.Connection, sql: str, params: tuple = (), sleeps=(0.01, 0.05, 0.1)
+):
+    """Execute SQL with tiny backoff if the database is locked (SQLite only)."""
+    for i, delay in enumerate((0.0, *sleeps)):
+        try:
+            if delay:
+                time.sleep(delay)
+            return c.execute(sql, params)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" in msg and i < len(sleeps):
+                continue
+            raise
+
+
+# Allow override via DATABASE_URL when using SQLite (sqlite:///path/to.db). Postgres will be added later.
+_DB_URL = os.getenv("DATABASE_URL")
+if _DB_URL and _DB_URL.startswith("sqlite"):
+    # Accept sqlite:///relative/path.db or sqlite:////absolute/path.db
+    _DB = _DB_URL.split("sqlite:///", 1)[-1]
+else:
+    _DB = "data/events.db"
+
 
 def _conn():
-    return sqlite3.connect(_DB, check_same_thread=False)
+    c = sqlite3.connect(_DB, check_same_thread=False)
+    _ensure_pragmas(c)
+    return c
 
 
 def init_db():
-    with _conn() as c:
-        # Create table with the newest schema (includes extra_json)
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS events(
-                ts_iso TEXT,
-                request_id TEXT,
-                status TEXT,
-                model TEXT,
-                tone TEXT,
-                timezone TEXT,
-                prompt_tokens INT,
-                completion_tokens INT,
-                cost_usd REAL,
-                cached INT,
-                extra_json TEXT
-            )"""
-        )
-        # If the table existed without extra_json, add it
-        cols = [r[1] for r in c.execute("PRAGMA table_info(events)").fetchall()]
-        if "extra_json" not in cols:
-            c.execute("ALTER TABLE events ADD COLUMN extra_json TEXT")
+    os.makedirs("data", exist_ok=True)
+    with _INIT_LOCK:
+        with engine.begin() as conn:
+            # Create events table with the full schema (works on SQLite and Postgres)
+            conn.execute(
+                text(
+                    """
+                CREATE TABLE IF NOT EXISTS events(
+                    ts_iso TEXT,
+                    request_id TEXT,
+                    status TEXT,
+                    model TEXT,
+                    tone TEXT,
+                    timezone TEXT,
+                    prompt_tokens INT,
+                    completion_tokens INT,
+                    cost_usd REAL,
+                    cached INT,
+                    user_id TEXT,
+                    auth_provider_id TEXT,
+                    session_id TEXT,
+                    minute_bucket TEXT,
+                    latency_ms INT,
+                    idempotency_key TEXT,
+                    extra_json TEXT
+                )
+                """
+                )
+            )
+            # Indexes (IF NOT EXISTS is supported in both SQLite and Postgres)
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts_iso)")
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_events_user_ts ON events(user_id, ts_iso)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_events_minute ON events(minute_bucket)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idem ON events(idempotency_key)"
+                )
+            )
+
+            # Usage table for free-tier minute metering
+            conn.execute(
+                text(
+                    """
+                CREATE TABLE IF NOT EXISTS usage_events(
+                    user_id TEXT NOT NULL,
+                    minute_bucket TEXT NOT NULL,
+                    request_id TEXT,
+                    PRIMARY KEY(user_id, minute_bucket)
+                )
+                """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_usage_user_minute ON usage_events(user_id, minute_bucket)"
+                )
+            )
 
 
 def write_event(row: dict):
-    """Insert a log row. Known columns go to dedicated fields; everything else is packed into extra_json."""
+    """Insert a log row. Known columns go to dedicated fields; everything else is packed into extra_json.
+    New fields supported (optional): user_id, auth_provider_id, session_id, minute_bucket, latency_ms, idempotency_key.
+    """
     base_keys = {
-        "ts_iso","request_id","status","model","tone","timezone",
-        "prompt_tokens","completion_tokens","cost_usd","cached"
+        "ts_iso",
+        "request_id",
+        "status",
+        "model",
+        "tone",
+        "timezone",
+        "prompt_tokens",
+        "completion_tokens",
+        "cost_usd",
+        "cached",
+        "user_id",
+        "auth_provider_id",
+        "session_id",
+        "minute_bucket",
+        "latency_ms",
+        "idempotency_key",
     }
-    ts_iso = row.get("ts_iso") or row.get("generated_at_iso") or dt.datetime.utcnow().isoformat()
-    # Ensure tone is a plain string (handles Enum values)
+    # Timestamps
+    ts_iso = row.get("ts_iso") or row.get("generated_at_iso") or _utc_now_iso()
+    # Normalize tone to string (handles Enums)
     tone_val = row.get("tone")
     tone_str = f"{tone_val}" if tone_val is not None else None
+    # Minute bucket (UTC ISO, truncated to minute)
+    mb = row.get("minute_bucket") or _iso_minute(ts_iso=ts_iso)
+
+    # Everything else goes to compact JSON
     extra = {k: v for k, v in row.items() if k not in base_keys}
-    extra_json = json.dumps(extra, ensure_ascii=False, separators=(",", ":")) if extra else None
-    with _conn() as c:
-        c.execute(
-            """INSERT INTO events(
-                   ts_iso, request_id, status, model, tone, timezone,
-                   prompt_tokens, completion_tokens, cost_usd, cached, extra_json)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                ts_iso,
-                row.get("request_id"),
-                row.get("status"),
-                row.get("model"),
-                tone_str,
-                row.get("timezone"),
-                row.get("prompt_tokens"),
-                row.get("completion_tokens"),
-                row.get("cost_usd"),
-                1 if row.get("cached") else 0,
-                extra_json,
-            ),
-        )
-        c.commit()
+    extra_json = (
+        json.dumps(extra, ensure_ascii=False, separators=(",", ":")) if extra else None
+    )
+
+    params = {
+        "ts_iso": ts_iso,
+        "request_id": row.get("request_id"),
+        "status": row.get("status"),
+        "model": row.get("model"),
+        "tone": tone_str,
+        "timezone": row.get("timezone"),
+        "prompt_tokens": row.get("prompt_tokens"),
+        "completion_tokens": row.get("completion_tokens"),
+        "cost_usd": row.get("cost_usd"),
+        "cached": 1 if row.get("cached") else 0,
+        "user_id": row.get("user_id"),
+        "auth_provider_id": row.get("auth_provider_id"),
+        "session_id": row.get("session_id"),
+        "minute_bucket": mb,
+        "latency_ms": row.get("latency_ms"),
+        "idempotency_key": row.get("idempotency_key"),
+        "extra_json": extra_json,
+    }
+
+    cols = (
+        "ts_iso, request_id, status, model, tone, timezone, "
+        "prompt_tokens, completion_tokens, cost_usd, cached, "
+        "user_id, auth_provider_id, session_id, minute_bucket, latency_ms, idempotency_key, extra_json"
+    )
+    values = (
+        ":ts_iso, :request_id, :status, :model, :tone, :timezone, "
+        ":prompt_tokens, :completion_tokens, :cost_usd, :cached, "
+        ":user_id, :auth_provider_id, :session_id, :minute_bucket, :latency_ms, :idempotency_key, :extra_json"
+    )
+
+    with engine.begin() as conn:
+        if is_postgres():
+            sql = f"INSERT INTO events ({cols}) VALUES ({values}) ON CONFLICT (idempotency_key) DO NOTHING"
+        else:
+            sql = f"INSERT OR IGNORE INTO events ({cols}) VALUES ({values})"
+        conn.execute(text(sql), params)
+
+
+def _iso_minute(ts: Optional[dt.datetime] = None, ts_iso: Optional[str] = None) -> str:
+    """Return an ISO8601 string truncated to the minute (UTC), with trailing 'Z'."""
+    if ts_iso:
+        try:
+            s = ts_iso.replace("Z", "+00:00")
+            d = dt.datetime.fromisoformat(s)
+        except Exception:
+            # Fallback slice assuming "YYYY-MM-DDTHH:MM:SS[Z]"
+            base = ts_iso[:16] + ":00"
+            return base if base.endswith("Z") else base + "Z"
+    else:
+        d = ts or dt.datetime.utcnow()
+    out = d.replace(second=0, microsecond=0).isoformat()
+    return out if out.endswith("Z") else out + "Z"
 
 
 def today_cost_sum() -> float:
-    start = dt.datetime.utcnow().date().isoformat()
-    with _conn() as c:
-        cur = c.execute("SELECT COALESCE(SUM(cost_usd),0) FROM events WHERE ts_iso LIKE ?", (f"{start}%",))
-        return float(cur.fetchone()[0] or 0.0)
+    start = dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + dt.timedelta(days=1)
+    with engine.begin() as conn:
+        res = conn.execute(
+            text(
+                "SELECT COALESCE(SUM(cost_usd),0) FROM events WHERE ts_iso >= :start AND ts_iso < :end"
+            ),
+            {"start": start.isoformat(), "end": end.isoformat()},
+        )
+        val = res.scalar()
+        return float(val or 0.0)
+
+
+def record_usage_minute(
+    user_id: str, minute: Optional[dt.datetime] = None, request_id: Optional[str] = None
+) -> bool:
+    """Record usage for the given user at the minute-level. Idempotent: returns True if inserted, False if already present."""
+    mb = _iso_minute(ts=minute)
+    with engine.begin() as conn:
+        if is_postgres():
+            res = conn.execute(
+                text(
+                    """
+                    INSERT INTO usage_events(user_id, minute_bucket, request_id)
+                    VALUES (:user_id, :minute_bucket, :request_id)
+                    ON CONFLICT (user_id, minute_bucket) DO NOTHING
+                """
+                ),
+                {"user_id": user_id, "minute_bucket": mb, "request_id": request_id},
+            )
+        else:
+            res = conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO usage_events(user_id, minute_bucket, request_id) VALUES(:user_id, :minute_bucket, :request_id)"
+                ),
+                {"user_id": user_id, "minute_bucket": mb, "request_id": request_id},
+            )
+        return (res.rowcount or 0) > 0
+
+
+def _month_bounds_utc(
+    anchor: Optional[dt.datetime] = None,
+) -> tuple[dt.datetime, dt.datetime]:
+    d = (anchor or dt.datetime.utcnow()).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    start = d.replace(day=1)
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1)
+    else:
+        end = start.replace(month=start.month + 1)
+    return start, end
+
+
+def monthly_usage_minutes(user_id: str, anchor: Optional[dt.datetime] = None) -> int:
+    """Count minute-bucketed usage for the user in the UTC month containing `anchor` (default now)."""
+    start, end = _month_bounds_utc(anchor)
+    with engine.begin() as conn:
+        res = conn.execute(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM usage_events
+                WHERE user_id = :user_id AND minute_bucket >= :start AND minute_bucket < :end
+            """
+            ),
+            {"user_id": user_id, "start": start.isoformat(), "end": end.isoformat()},
+        )
+        return int(res.scalar() or 0)
+
+
+def purge_old_events(older_than_days: int = 90) -> dict:
+    """Delete events older than N days and stale usage rows. Returns counts per table."""
+    cutoff = dt.datetime.utcnow() - dt.timedelta(days=older_than_days)
+    cutoff_iso = cutoff.replace(second=0, microsecond=0).isoformat()
+    cutoff_minute = _iso_minute(ts=cutoff)
+    with engine.begin() as conn:
+        r1 = conn.execute(
+            text("DELETE FROM events WHERE ts_iso < :cutoff"), {"cutoff": cutoff_iso}
+        )
+        r2 = conn.execute(
+            text("DELETE FROM usage_events WHERE minute_bucket < :cutoff_minute"),
+            {"cutoff_minute": cutoff_minute},
+        )
+        return {"events": int(r1.rowcount or 0), "usage_events": int(r2.rowcount or 0)}
+
+
+def vacuum_if_needed(min_mb: int = 100) -> bool:
+    """VACUUM the SQLite file if size exceeds threshold. No-op for non-SQLite URLs."""
+    if not (_DB and isinstance(_DB, str) and os.path.isfile(_DB)):
+        return False
+    try:
+        size_mb = os.path.getsize(_DB) / (1024 * 1024)
+    except Exception:
+        return False
+    if size_mb < min_mb:
+        return False
+    # VACUUM must run outside an open transaction
+    try:
+        with sqlite3.connect(_DB) as c:
+            c.isolation_level = None
+            c.execute("VACUUM")
+        return True
+    except Exception:
+        return False

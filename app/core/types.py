@@ -1,14 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Literal, Optional, Any, Dict
 
-Tone = Literal["Whimsical","Stoic","Wistful","Funny","Haiku","Noir","Minimal","Cosmic"]
+Tone = Literal[
+    "Whimsical", "Stoic", "Wistful", "Funny", "Haiku", "Noir", "Minimal", "Cosmic"
+]
+
 
 class PoemRequest(BaseModel):
     tone: Tone = "Stoic"
-    timezone: str = "America/Chicago"   # client IANA tz
-    format: Literal["12h","24h","auto"] = "auto"
+    timezone: str = "America/Chicago"  # client IANA tz
+    format: Literal["12h", "24h", "auto"] = "auto"
     locale: str = "en-US"
-    forceNew: bool = False              # bypass minute-cache
+    forceNew: bool = False  # bypass minute-cache
+
 
 class PoemResponse(BaseModel):
     poem: str
@@ -19,7 +23,7 @@ class PoemResponse(BaseModel):
     tone: Optional[Tone] = None
     daypart: Optional[str] = None
     cached: bool = False
-    status: Literal["ok","fallback","error"] = "ok"
+    status: Literal["ok", "fallback", "error"] = "ok"
     prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0

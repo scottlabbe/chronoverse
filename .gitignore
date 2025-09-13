@@ -22,6 +22,12 @@ htmlcov/
 .venv/
 venv/
 .python-version
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.db-shm
+*.db-wal
 
 # ---- Env / Secrets
 .env
