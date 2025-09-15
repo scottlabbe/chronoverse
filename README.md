@@ -5,7 +5,7 @@ Minimalist, living “time poems.” Each visit (or minute) generates a short po
 ## ✨ Highlights
 
 - **Clean UI** with big type and optional fullscreen “presentation mode”
-- **Tones**: Whimsical, Stoic, Wistful, Funny, Haiku, Noir, Minimal, Cosmic
+- **Tones**: Whimsical, Wistful, Funny, Noir, Minimal, Cosmic, Nature, Romantic, Spooky
 - **Prompt rules**: must include clock time, under 3 lines, no AM/PM, no timezone, style follows chosen tone
 - **Daypart awareness**: early morning / morning / afternoon / evening / night / late night, injected as metadata (not literal AM/PM) to guide imagery
 - **Minute auto-refresh** (default **ON**): new poem each minute, with jitter, pauses when tab hidden
@@ -13,7 +13,7 @@ Minimalist, living “time poems.” Each visit (or minute) generates a short po
 - **GPT-5 controls**: `text.verbosity`, `reasoning.effort` (Responses API)
 - **Caching**: in-memory, per minute+tone
 - **Logging**: SQLite events DB with full response snapshot in JSON for later analysis
-- **Swagger UI**: interactive testing at `/docs`
+- **Swagger UI**: interactive testing at `/docs` (when enabled via `ENABLE_SWAGGER=1`)
 
 ---
 
@@ -34,17 +34,24 @@ chronoverse/
 │  ├─ data/
 │  │  ├─ events.py             # SQLite writes, schema
 │  │  └─ events.db             # SQLite database (created at runtime)
-│  └─ types/
-│     └─ models.py             # Pydantic request/response types (PoemRequest/PoemResponse)
+│  └─ core/
+│     └─ types.py              # Pydantic request/response types (PoemRequest/PoemResponse)
 ├─ web/
 │  ├─ index.html
 │  ├─ vite.config.ts
 │  ├─ package.json
 │  └─ src/
-│     ├─ App.tsx               # UI, timer, fetch, tone selector, fullscreen button
-│     ├─ api.ts                # client fetcher for /api/poem
+│     ├─ main.tsx              # routes: "/" (Home) and "/app" (poem app)
+│     ├─ pages/
+│     │  └─ Home.tsx           # landing page with corner micro‑nav (version/theme)
+│     ├─ App.tsx               # main poem app (timer, tone selector, presentation)
+│     ├─ components/
+│     │  └─ ControlsRail.tsx   # minimal corner menu (present, billing, sign out)
+│     ├─ lib/
+│     │  ├─ api.ts             # client for /api endpoints
+│     │  └─ supabase.ts        # Supabase client (auth)
 │     └─ styles/
-│        └─ globals.css        # responsive typography, full-bleed layout
+│        └─ globals.css        # responsive typography, presentation sizing
 ├─ .env                        # environment variables (see below)
 ├─ requirements.txt
 ├─ .gitignore
@@ -64,14 +71,14 @@ POST /api/poem
 **Request body** (JSON):
 ```json
 {
-  "tone": "Stoic",
+  "tone": "Wistful",
   "timezone": "America/Chicago",
   "format": "12h",
   "forceNew": true
 }
 ```
 
-- `tone`: one of: Whimsical | Stoic | Wistful | Funny | Haiku | Noir | Minimal | Cosmic
+- `tone`: one of: Whimsical | Wistful | Funny | Noir | Minimal | Cosmic | Nature | Romantic | Spooky
 - `timezone`: IANA tz string; we **do not** include timezone name in the poem
 - `format`: "12h" or "24h"; the prompt logic **strips AM/PM** before sending to the model
 - `forceNew`: skip cache for a fresh generation
@@ -84,7 +91,7 @@ POST /api/poem
   "generated_at_iso": "2025-09-01T12:39:34.657032+00:00",
   "time_used": "7:39",
   "timezone": "America/Chicago",
-  "tone": "Stoic",
+  "tone": "Wistful",
   "daypart": "early morning",
   "cached": false,
   "status": "ok",
@@ -141,11 +148,34 @@ Enable `ADAPTER_DEBUG=1` to log a compact structural peek so you can see exactly
 ## Frontend Overview
 
 - **Vite + React (TypeScript)**
-- `App.tsx` renders the poem, tone selector, daypart display, and a **Fullscreen** button
-- **Minute auto-refresh (default ON)**:
+- Routes (`react-router-dom`): `"/"` → Home, `"/app"` → Poem App
+- `App.tsx` renders the poem, tone selector, version/theme, and a **Presentation** toggle
+- A subtle **Feedback** dialog is available in the bottom-left menu (App). It emails feedback and logs it durably.
+- `Home.tsx` mirrors the app’s minimalist aesthetics with corner micro‑navigation
+- **Minute auto-refresh (default ON)** in the Poem App:
   - Schedules next fetch aligned to the next minute with a small jitter (to avoid thundering herd)
   - Uses Page Visibility API: pauses updates when tab is hidden; resumes when visible
 - Responsive typography; layout expands to **full viewport height** (`100svh`) and supports presentation-like fullscreen
+
+### Home Page (design‑consistent)
+- Corner micro‑nav:
+  - Top‑left: version (Gallery / Manuscript / Zen)
+  - Top‑right: theme (Paper / Stone / Ink / Slate / Mist)
+- Minimal hero: typography adopts the selected version (serif vs sans, spacing, alignment)
+- CTAs: primary “Start free/Continue” and secondary “Subscribe” using shared Button styles
+- Auth: lightweight magic‑link form (no heavy chrome), status + error messages
+- Bottom‑right: low‑key legal links (terms, privacy); bottom‑left: sign out label when authed
+
+### Fonts
+- No bundled webfonts; uses system stacks:
+  - Serif: `ui-serif, Georgia, Cambria, "Times New Roman", Times, serif`
+  - Sans: `ui-sans-serif, system-ui, sans-serif`
+
+### Client preferences (localStorage)
+- `cv:tone` → current poem tone (App)
+- `cv:auto` → auto-refresh enabled flag (App; default ON)
+- `cv:version` → version: Gallery | Manuscript | Zen (Home + App)
+- `cv:theme` → theme: Paper | Stone | Ink | Slate | Mist (Home + App)
 
 ---
 
@@ -173,6 +203,15 @@ npm run dev
 # Dev server will print a local URL
 ```
 
+Frontend env (Vite) is read from `web/.env*` files. For Supabase auth locally, set:
+
+```bash
+# web/.env.local
+VITE_SUPABASE_URL=...      # from your Supabase project settings
+VITE_SUPABASE_ANON_KEY=... # public anon key
+VITE_API_BASE=/api         # default; dev proxy maps /api → http://127.0.0.1:8000
+```
+
 **Tip (Apple Silicon + Linux mixed dev environments):**  
 If a previous `package.json` contained platform-specific packages (e.g., `@rollup/rollup-darwin-arm64`), remove them and reinstall. Keep `devDependencies` generic (vite, @vitejs/plugin-react, typescript, etc.).
 
@@ -183,8 +222,13 @@ If a previous `package.json` contained platform-specific packages (e.g., `@rollu
 > **Important:** For list fields, use comma-separated **or** valid JSON arrays with quoted strings.
 
 ```dotenv
-# Required
+# Required (Backend)
 OPENAI_API_KEY=sk-...
+SUPABASE_JWT_JWKS_URL=https://<project-ref>.supabase.co/auth/v1/jwks
+# If your project still issues HS256 tokens, also set:
+SUPABASE_JWT_SECRET=...
+# Pin issuer for JWT hardening (from your Supabase project)
+SUPABASE_ISS=https://<project-ref>.supabase.co/auth/v1
 
 # Which model users see by default
 PRIMARY_MODEL=gpt-5-nano
@@ -203,9 +247,13 @@ SHADOW_TARGETS=gpt-5-mini,gpt-5-nano
 # OR JSON:
 # SHADOW_TARGETS=["gpt-5-mini","gpt-5-nano"]
 
-# Safety
+# Safety / CORS / Docs
 DAILY_COST_LIMIT_USD=0.50
-CORS_ORIGINS=*
+# Dev:
+CORS_ORIGINS=http://localhost:5173
+# Prod example:
+# CORS_ORIGINS=["https://chronoverse.app","https://www.chronoverse.app"]
+ENABLE_SWAGGER=0
 
 # GPT-5 Responses API controls (strings)
 VERBOSITY=low            # low | medium | high
@@ -218,8 +266,40 @@ PRICE_COMPLETION_gpt-5=10.00
 PRICE_PROMPT_gpt-5-mini=0.25
 PRICE_COMPLETION_gpt-5-mini=2.00
 
+# Rate limiting (optional; sensible defaults are built-in)
+USER_RL_PER_MIN=6
+IP_RL_PER_MIN=60
+# Shared cache/limiter (optional): if not set, falls back to in-memory
+# REDIS_URL=redis://localhost:6379/0
+
+# Security headers (enable in prod over HTTPS)
+ENABLE_HSTS=1
+ENABLE_CSP=1
+# Optional override, include Supabase in connect-src if needed
+# CSP_POLICY="default-src 'self'; connect-src 'self' https://*.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'"
+
+# Health probe protection (optional)
+# HEALTH_TOKEN=<random-long-secret>
+
 PRICE_PROMPT_gpt-5-nano=0.05
 PRICE_COMPLETION_gpt-5-nano=0.40
+
+# Optional shared cache (recommended for multiple workers/instances)
+# Example: redis://localhost:6379/0
+REDIS_URL=
+
+# SMTP (Feedback email; optional but recommended)
+# For Gmail, use an App Password and SMTP_HOST=smtp.gmail.com, SMTP_PORT=587
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASSWORD=
+# From address; defaults to SMTP_USER if omitted
+SMTP_FROM=
+# Destination for feedback emails; defaults to scottlabbe123@gmail.com
+FEEDBACK_TO=
+
+If SMTP is not configured or sending fails, feedback is still saved to the DB and a copy is written to `data/feedback_outbox/*.eml` for inspection during development.
 ```
 
 > **Note:** Our settings loader ignores unknown keys so these `PRICE_*` entries don’t break validation.  
@@ -229,9 +309,11 @@ PRICE_COMPLETION_gpt-5-nano=0.40
 
 ## Caching
 
-- In-memory Python dict keyed by `minute + tone` (e.g., `08:18_stoic`)
-- TTL ~60s; we clear each minute to ensure freshness
-- `forceNew=true` bypasses cache
+- Cache key: `YYYY-MM-DDTHH:MM|<timezone>|<tone>|<model>` (minute granularity)
+- Default in-memory cache per process (TTL ~60s)
+- Optional shared cache via Redis when `REDIS_URL` is set (recommended for multi-worker/instance deploys)
+- Concurrency coalescing per key to prevent thundering herd; uses Redis lock when available, otherwise local lock
+- UI uses the cache for minute ticks and tone changes; tab-hidden pauses updates. `forceNew=true` is available for explicit bypass/testing.
 
 ---
 
@@ -288,15 +370,52 @@ sqlite3 data/events.db "SELECT ts_iso,status,model,cached,substr(extra_json,1,16
 
 ## Using the API
 
-**cURL:**
+**cURL (with Supabase auth):**
 ```bash
+ACCESS_TOKEN="<supabase-access-token>"
 curl -s -X POST 'http://127.0.0.1:8000/api/poem' \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"tone":"Stoic","timezone":"America/Chicago","format":"12h","forceNew":true}' | jq .
+  -d '{"tone":"Wistful","timezone":"America/Chicago","format":"12h"}' | jq .
 ```
 
 **Swagger:**  
-Open `http://127.0.0.1:8000/docs` and use the `POST /api/poem` operation interactively.
+If `ENABLE_SWAGGER=1`, open `http://127.0.0.1:8000/docs` and use the `POST /api/poem` operation interactively.
+
+---
+
+## Feedback API
+
+```
+POST /api/feedback  (auth required)
+```
+
+Request body:
+```
+{
+  "message": "I love the Zen version!",
+  "includeContext": true,
+  "context": {
+    "tone": "Wistful",
+    "version": "Gallery",
+    "theme": "Paper",
+    "poem": "…",
+    "timezone": "America/Chicago",
+    "format": "12h",
+    "path": "/app"
+  }
+}
+```
+
+Response:
+```
+{ "ok": true, "emailed": true, "logged": true }
+```
+
+Behavior:
+- Requires Supabase JWT (same as other API routes).
+- Rate limited (per-IP and per-user, shared with app limits).
+- Always logs to SQLite `data/events.db` in a `feedback` table; attempts to email to `FEEDBACK_TO`.
 
 ---
 
@@ -313,8 +432,8 @@ Then restart the server. To ensure you bypass cache, hit the API with `"forceNew
 ## Fullscreen / Presentation Mode
 
 - The UI uses `100svh` and responsive type
-- A **Fullscreen** button requests the browser fullscreen API
-- Escape or browser UI exits fullscreen
+- **Presentation** toggle (in the Poem App) enters fullscreen and applies presentation sizing
+- Keyboard: `F` toggles presentation; `Esc` exits; `N` forces a new poem (cache-bypass)
 
 ---
 
@@ -377,3 +496,11 @@ git push -u origin main
 - **Replit / simple VM**: run FastAPI with `uvicorn`, host frontend as static build or keep Vite dev server behind a reverse proxy for local
 - Ensure `OPENAI_API_KEY` & other envs are set securely
 - Consider a small process manager (e.g., `pm2`, `systemd`) for `uvicorn`
+
+### Security & Runtime Notes
+- Authentication: All API routes use Supabase JWT (RS256 via JWKS or HS256 via secret). Set `SUPABASE_ISS` to pin issuer.
+- CORS: Lock `CORS_ORIGINS` to your app’s domain(s) in production; keep `http://localhost:5173` in dev.
+- Cost controls: Singleflight + minute gating ensure at most one LLM call per minute per tone/timezone. `forceNew` is ignored after first-minute debit.
+- Rate limits: Per-user and per-IP (env-tunable); use `REDIS_URL` for multi-instance consistency.
+- Docs/health: `/docs` enabled only if `ENABLE_SWAGGER=1`. `/api/_db/health` returns `{ ok }` and can require `X-Health-Token` when `HEALTH_TOKEN` is set.
+- Security headers: Enable HSTS/CSP in prod (`ENABLE_HSTS=1`, `ENABLE_CSP=1`).

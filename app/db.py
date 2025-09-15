@@ -1,5 +1,13 @@
 import os
 import logging
+try:
+    # Ensure local .env is loaded for dev runs (Alembic already does this)
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    # dotenv is optional; if not present, proceed with raw environment
+    pass
 from sqlalchemy import create_engine, event
 
 DB_ECHO = os.getenv("DB_ECHO") == "1"
@@ -71,4 +79,9 @@ def is_postgres() -> bool:
 
 
 # Optional one-line startup log (non-fatal if logging not configured)
-logging.getLogger(__name__).info("DB engine ready", extra={"dialect": dialect()})
+try:
+    logging.getLogger(__name__).info(
+        "DB engine ready", extra={"dialect": dialect(), "url": str(engine.url)}
+    )
+except Exception:
+    pass

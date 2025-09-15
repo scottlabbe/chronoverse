@@ -14,14 +14,15 @@ from app.data import events as ev
 log = logging.getLogger("poem")
 
 TONE_STYLE = {
-    "Whimsical": "light, playful metaphors; gentle alliteration",
-    "Stoic": "calm, restrained, simple diction",
-    "Wistful": "short, soft, nostalgia",
-    "Funny": "wry, amusing humor",
-    "Haiku": "write exactly 3 lines with 5/7/5 syllables inlcuding the time.",
-    "Noir": "moody, cinematic; concrete imagery",
-    "Minimal": "ultra-brief; no adjectives",
-    "Cosmic": "space/time motifs; awe",
+    "Whimsical": "Playful imagery, surprising metaphors, light rhythm; evoke childlike wonder.",
+    "Wistful": "Soft, melancholy nostalgia; gentle pacing, sensory details.",
+    "Funny": "Wry, witty, or absurd humor; compact punchline feel.",
+    "Noir": "Moody, cinematic; city imagery.",
+    "Minimal": "Optimistic, sparse words, no adjectives, stripped punctuation; blunt imagery.",
+    "Cosmic": "Scale of galaxies, eternity; awe, metaphysics; grand metaphors.",
+    "Nature": "Wind, trees, water, and seasonal textures; grounded, sensory calm; earthy imagery.",
+    "Romantic": "Tender affection, intimate details; warm tone and soft rhythm; subtle longing or delight.",
+    "Spooky": "Eerie, uncanny mood; shadows and whispers; gentle suspense without gore.",
 }
 
 
@@ -70,10 +71,9 @@ def make_prompt(
         "<<RULES>>\n"
         "- Write a short poem that includes the time exactly once.\n"
         "- Write the time anywhere in the poem (number or english form).\n"
-        "- Length: ≤ 3 lines and <180 characters.\n"
-        "- Voice: punchy, fun, accessible; prefer concrete images and active verbs.\n"
-        "- Output the poem only.\n"
-        "- Mind the input but it's optional to include in poem text.\n"
+        "- Length: ≤ 3 lines with \n as appropriate.\n"
+        "- Voice: punchy, accessible; prefer concrete images and active verbs.\n"
+        "- Output the poem only with \n as appropriate.\n"
         f"<<INPUT>>\n"
         f"time: {time_used}\n"
         f"daypart: {daypart}\n"
@@ -106,6 +106,8 @@ async def generate_poem(
     bg: BackgroundTasks | None = None,
 ) -> dict:
 
+    # Locks and shared-cache are provided by app.services.cache (Redis if configured)
+
     async def _call_model(adapter: OpenAIAdapter, model: str, prompt: str) -> LLMResult:
         # Adapter is model-aware and will omit unsupported params for GPT-5.
         return await adapter.generate(model=model, prompt=prompt, max_tokens=500)
@@ -115,8 +117,11 @@ async def generate_poem(
     local_dt = datetime.now(ZoneInfo(tz))
     daypart = daypart_for(local_dt)
     minute_of_day = local_dt.hour * 60 + local_dt.minute
+    # Use a deterministic salt so multiple users/instances align for the same minute/tone/tz
+    # Avoid model in salt to keep consistency across identical prompts
+    deterministic_salt = f"{local_dt.strftime('%Y-%m-%dT%H:%M')}|{tz}|{tone}"
     extra_hint, directive_id = micro_directives.pick(
-        minute_of_day, tone=str(tone), salt=req_id
+        minute_of_day, tone=str(tone), salt=deterministic_salt
     )
 
     # Budget check
@@ -148,157 +153,172 @@ async def generate_poem(
         return payload
 
     cache_key = f"{local_dt.strftime('%Y-%m-%dT%H:%M')}|{tz}|{tone}|{cfg.PRIMARY_MODEL}"
-    if not force_new:
-        cached = cache.get(cache_key)
-        if cached:
-            return {**cached, "cached": True}
+    # Singleflight: lock the full read/generate/write sequence per-minute key
+    async with cache.alock(cache_key):
+        # Double-check cache inside the lock to coalesce concurrent requests
+        if not force_new:
+            cached = await cache.aget(cache_key)
+            if cached:
+                return {**cached, "cached": True}
 
-    t_for_prompt = (
-        t_used.replace(" AM", "")
-        .replace(" PM", "")
-        .replace(" am", "")
-        .replace(" pm", "")
-    )
-    prompt = make_prompt(t_for_prompt, tone, daypart, extra_hint=extra_hint)
-    model_for_user = choose_model(cfg, req_id)
+        t_for_prompt = (
+            t_used.replace(" AM", "")
+            .replace(" PM", "")
+            .replace(" am", "")
+            .replace(" pm", "")
+        )
+        prompt = make_prompt(t_for_prompt, tone, daypart, extra_hint=extra_hint)
+        model_for_user = choose_model(cfg, req_id)
 
-    try:
-        # Primary response (for user)
-        res = await _call_model(adapter, model_for_user, prompt)
-        # Safety net: successful call but empty text → return fallback poem
-        if not (getattr(res, "text", "") or "").strip():
-            fallback = {
-                "poem": "The clock ticks on, a steady, rhythmic chime,\nBut the muse of code is lost in space and time.\nIt tried to write a verse for you, it's true,\nBut the server sprites had other things to do.",
-                "model": res.model if getattr(res, "model", None) else None,
+        try:
+            # Primary response (for user). While holding the lock to avoid duplicate calls.
+            res = await _call_model(adapter, model_for_user, prompt)
+            # Safety net: successful call but empty text → return fallback poem
+            if not (getattr(res, "text", "") or "").strip():
+                fallback = {
+                    "poem": "The clock ticks on, a steady, rhythmic chime,\nBut the muse of code is lost in space and time.\nIt tried to write a verse for you, it's true,\nBut the server sprites had other things to do.",
+                    "model": res.model if getattr(res, "model", None) else None,
+                    "generated_at_iso": datetime.now(timezone.utc).isoformat(),
+                    "time_used": t_used,
+                    "tone": tone,
+                    "cached": False,
+                    "status": "fallback",
+                    "prompt_tokens": getattr(res, "prompt_tokens", 0),
+                    "completion_tokens": getattr(res, "completion_tokens", 0),
+                    "reasoning_tokens": getattr(res, "reasoning_tokens", 0),
+                    "cost_usd": 0.0,
+                    "request_id": req_id,
+                    "timezone": tz,
+                    "retry_count": getattr(res, "retry_count", 0),
+                    "params_used": getattr(res, "params_used", None),
+                    "daypart": daypart,
+                    "response_id": getattr(res, "response_id", None),
+                    "latency_ms": getattr(res, "latency_ms", None),
+                    "directive_id": directive_id,
+                    "extra_hint": extra_hint,
+                }
+                ev.write_event(fallback)
+                log.warning(
+                    "empty_poem_from_model model=%s req_id=%s", model_for_user, req_id
+                )
+                return fallback
+
+            retry_count = getattr(res, "retry_count", 0)
+            params_used = getattr(res, "params_used", None)
+            reasoning_tokens = getattr(res, "reasoning_tokens", 0)
+            cost = pricing.cost_usd(res.model, res.prompt_tokens, res.completion_tokens)
+            payload = {
+                "poem": res.text,
+                "model": res.model,
                 "generated_at_iso": datetime.now(timezone.utc).isoformat(),
                 "time_used": t_used,
                 "tone": tone,
                 "cached": False,
-                "status": "fallback",
-                "prompt_tokens": getattr(res, "prompt_tokens", 0),
-                "completion_tokens": getattr(res, "completion_tokens", 0),
-                "reasoning_tokens": getattr(res, "reasoning_tokens", 0),
-                "cost_usd": 0.0,
+                "status": "ok",
+                "prompt_tokens": res.prompt_tokens,
+                "completion_tokens": res.completion_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "cost_usd": cost,
                 "request_id": req_id,
                 "timezone": tz,
-                "retry_count": getattr(res, "retry_count", 0),
-                "params_used": getattr(res, "params_used", None),
+                "retry_count": retry_count,
+                "params_used": params_used,
                 "daypart": daypart,
                 "response_id": getattr(res, "response_id", None),
                 "latency_ms": getattr(res, "latency_ms", None),
                 "directive_id": directive_id,
                 "extra_hint": extra_hint,
             }
-            ev.write_event(fallback)
-            log.warning(
-                "empty_poem_from_model model=%s req_id=%s", model_for_user, req_id
-            )
-            return fallback
-
-        retry_count = getattr(res, "retry_count", 0)
-        params_used = getattr(res, "params_used", None)
-        reasoning_tokens = getattr(res, "reasoning_tokens", 0)
-        cost = pricing.cost_usd(res.model, res.prompt_tokens, res.completion_tokens)
-        payload = {
-            "poem": res.text,
-            "model": res.model,
-            "generated_at_iso": datetime.now(timezone.utc).isoformat(),
-            "time_used": t_used,
-            "tone": tone,
-            "cached": False,
-            "status": "ok",
-            "prompt_tokens": res.prompt_tokens,
-            "completion_tokens": res.completion_tokens,
-            "reasoning_tokens": reasoning_tokens,
-            "cost_usd": cost,
-            "request_id": req_id,
-            "timezone": tz,
-            "retry_count": retry_count,
-            "params_used": params_used,
-            "daypart": daypart,
-            "response_id": getattr(res, "response_id", None),
-            "latency_ms": getattr(res, "latency_ms", None),
-            "directive_id": directive_id,
-            "extra_hint": extra_hint,
-        }
-        if res.model == cfg.PRIMARY_MODEL and payload.get("status") == "ok":
-            cache.set(cache_key, payload)
-        ev.write_event(payload)
-
-        # Shadow mode: also call SECONDARY in background for logging-only
-        if cfg.EXPERIMENT_MODE == "shadow" and bg and cfg.SHADOW_TARGETS:
-
-            def _shadow(
-                models: list[str], prompt: str, tz: str, tone: Tone, req_id: str
-            ):
-                import asyncio
-
-                async def run():
-                    for m in models:
-                        try:
-                            sres = await _call_model(adapter, m, prompt)
-                            scost = pricing.cost_usd(
-                                sres.model, sres.prompt_tokens, sres.completion_tokens
-                            )
-                            ev.write_event(
-                                {
-                                    "ts_iso": datetime.now(timezone.utc).isoformat(),
-                                    "request_id": req_id,
-                                    "status": "shadow",
-                                    "model": sres.model,
-                                    "tone": tone,
-                                    "timezone": tz,
-                                    "prompt_tokens": sres.prompt_tokens,
-                                    "completion_tokens": sres.completion_tokens,
-                                    "cost_usd": scost,
-                                    "cached": 0,
-                                    # extra telemetry (ignored by current schema but useful if/when extended)
-                                    "reasoning_tokens": getattr(
-                                        sres, "reasoning_tokens", 0
-                                    ),
-                                    "retry_count": getattr(sres, "retry_count", 0),
-                                    "params_used": getattr(sres, "params_used", None),
-                                    "daypart": daypart,
-                                    "response_id": getattr(sres, "response_id", None),
-                                    "latency_ms": getattr(sres, "latency_ms", None),
-                                    "directive_id": directive_id,
-                                    "extra_hint": extra_hint,
-                                }
-                            )
-                        except Exception:
-                            pass
-
+            if res.model == cfg.PRIMARY_MODEL and payload.get("status") == "ok":
+                # Populate cache so all instances/workers can reuse (still under lock)
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(run())
-                except RuntimeError:
-                    asyncio.run(run())
+                    await cache.aset(cache_key, payload, ttl_seconds=60)
+                except Exception:
+                    pass
+            ev.write_event(payload)
 
-            bg.add_task(_shadow, cfg.SHADOW_TARGETS, prompt, tz, tone, req_id)
-        return payload
-    except Exception as e:
-        fallback = {
-            "poem": "The clock ticks on, a steady, rhythmic chime,\nBut the muse of code is lost in space and time.\nIt tried to write a verse for you, it's true,\nBut the server sprites had other things to do.",
-            "model": None,
-            "generated_at_iso": datetime.now(timezone.utc).isoformat(),
-            "time_used": t_used,
-            "tone": tone,
-            "cached": False,
-            "status": "fallback",
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "reasoning_tokens": 0,
-            "cost_usd": 0.0,
-            "request_id": req_id,
-            "timezone": tz,
-            "retry_count": 0,
-            "params_used": None,
-            "daypart": daypart,
-            "response_id": None,
-            "latency_ms": None,
-            "directive_id": directive_id,
-            "extra_hint": extra_hint,
-        }
-        ev.write_event(fallback)
-        log.exception("model_error: %s", e)
-        return fallback
+            # Shadow mode: also call SECONDARY in background for logging-only
+            if cfg.EXPERIMENT_MODE == "shadow" and bg and cfg.SHADOW_TARGETS:
+
+                def _shadow(
+                    models: list[str], prompt: str, tz: str, tone: Tone, req_id: str
+                ):
+                    import asyncio
+
+                    async def run():
+                        for m in models:
+                            try:
+                                sres = await _call_model(adapter, m, prompt)
+                                scost = pricing.cost_usd(
+                                    sres.model,
+                                    sres.prompt_tokens,
+                                    sres.completion_tokens,
+                                )
+                                ev.write_event(
+                                    {
+                                        "ts_iso": datetime.now(
+                                            timezone.utc
+                                        ).isoformat(),
+                                        "request_id": req_id,
+                                        "status": "shadow",
+                                        "model": sres.model,
+                                        "tone": tone,
+                                        "timezone": tz,
+                                        "prompt_tokens": sres.prompt_tokens,
+                                        "completion_tokens": sres.completion_tokens,
+                                        "cost_usd": scost,
+                                        "cached": 0,
+                                        # extra telemetry (ignored by current schema but useful if/when extended)
+                                        "reasoning_tokens": getattr(
+                                            sres, "reasoning_tokens", 0
+                                        ),
+                                        "retry_count": getattr(sres, "retry_count", 0),
+                                        "params_used": getattr(
+                                            sres, "params_used", None
+                                        ),
+                                        "daypart": daypart,
+                                        "response_id": getattr(
+                                            sres, "response_id", None
+                                        ),
+                                        "latency_ms": getattr(sres, "latency_ms", None),
+                                        "directive_id": directive_id,
+                                        "extra_hint": extra_hint,
+                                    }
+                                )
+                            except Exception:
+                                pass
+
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(run())
+                    except RuntimeError:
+                        asyncio.run(run())
+
+                bg.add_task(_shadow, cfg.SHADOW_TARGETS, prompt, tz, tone, req_id)
+            return payload
+        except Exception as e:
+            fallback = {
+                "poem": "The clock ticks on, a steady, rhythmic chime,\nBut the muse of code is lost in space and time.\nIt tried to write a verse for you, it's true,\nBut the server sprites had other things to do.",
+                "model": None,
+                "generated_at_iso": datetime.now(timezone.utc).isoformat(),
+                "time_used": t_used,
+                "tone": tone,
+                "cached": False,
+                "status": "fallback",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "reasoning_tokens": 0,
+                "cost_usd": 0.0,
+                "request_id": req_id,
+                "timezone": tz,
+                "retry_count": 0,
+                "params_used": None,
+                "daypart": daypart,
+                "response_id": None,
+                "latency_ms": None,
+                "directive_id": directive_id,
+                "extra_hint": extra_hint,
+            }
+            ev.write_event(fallback)
+            log.exception("model_error: %s", e)
+            return fallback

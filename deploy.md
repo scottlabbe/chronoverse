@@ -81,17 +81,19 @@
    `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `PRICE_ID`, `PUBLIC_BASE_URL`, `STRIPE_WEBHOOK_SECRET`
 2) **Endpoints**
    - `POST /api/billing/checkout`  
-     Creates Checkout Session (`mode=subscription`, `line_items=[{price: PRICE_ID}]`, `client_reference_id=user_id`, `success_url`/`cancel_url` → `${PUBLIC_BASE_URL}/app`)
+     Creates Checkout Session (`mode=subscription`, `line_items=[{price: PRICE_ID}]`, `client_reference_id=user_id`, `success_url=${PUBLIC_BASE_URL}/app?session_id={CHECKOUT_SESSION_ID}`, `cancel_url=${PUBLIC_BASE_URL}/app`).
    - `GET /api/billing/portal`  
      Creates Billing Portal session for `stripe_customer_id`.
    - `POST /api/billing/webhook` (verify signature)  
      - `checkout.session.completed` → upsert `users.stripe_customer_id`, insert `subscriptions` row with `status`, `price_id`, `plan`, `current_period_end`.
      - `customer.subscription.updated|deleted` → keep `status`/`current_period_end` in sync.
+   - `GET /api/billing/verify?session_id=cs_test_...`  
+     Authenticated fallback to mirror subscription on return without relying on webhooks (idempotent; validates `client_reference_id`).
 3) **Bypass**
    - `is_subscribed()` already wired; paid users immediately bypass the 402.
 
 **Client**
-- On **402** with `{ reason: "free_limit_reached" }` → show **Upgrade** card → call Checkout endpoint; after return, reload `/api/me`.
+- On **402** with `{ reason: "free_limit_reached" }` → show **Upgrade** card → call Checkout; on return with `?session_id=...`, call `GET /api/billing/verify` → then reload `/api/me`.
 - When `/api/me.subscribed` is true → show **Manage Billing** (Portal).
 
 **Acceptance**
@@ -102,6 +104,23 @@
 - Webhook not reachable (use Railway public URL).
 - Wrong `PUBLIC_BASE_URL` → after checkout, you don’t land back on your `/app`.
 - Timezones: ensure `current_period_end` is future vs `NOW()` in Postgres.
+
+### Stripe CLI — local testing
+Use Stripe CLI to receive webhook events during local development:
+
+```
+stripe login
+stripe listen --forward-to http://127.0.0.1:8000/api/billing/webhook
+```
+
+Set env locally in `.env`:
+- `STRIPE_SECRET_KEY=sk_test_...`
+- `STRIPE_PUBLISHABLE_KEY=pk_test_...` (frontend uses Vite env at build)
+- `PRICE_ID=price_...`
+- `PUBLIC_BASE_URL=http://127.0.0.1:8000`
+- `STRIPE_WEBHOOK_SECRET` (from `stripe listen` output)
+
+Use test card `4242 4242 4242 4242` with any future expiry and CVC.
 
 ---
 

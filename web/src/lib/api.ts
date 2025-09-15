@@ -53,12 +53,21 @@ export type PoemResponse = {
 export async function getPoem(body: PoemRequest): Promise<PoemResponse> {
   const res = await apiFetch('/poem', {
     method: 'POST',
-    body: JSON.stringify({ forceNew: true, ...body }),
+    // Do not force cache-bypass by default; allow caller to opt into forceNew
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { msg = (await res.text()) || msg; } catch {}
-    throw new Error(`ChronoVerse API error: ${msg}`);
+    let body: any = null;
+    try {
+      body = await res.json();
+    } catch {
+      try { body = await res.text(); } catch {}
+    }
+    const detail = body && typeof body === 'object' && 'detail' in body ? (body as any).detail : body;
+    const err: any = new Error('ChronoVerse API error');
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
   }
   return res.json();
 }
@@ -67,7 +76,62 @@ export async function createCheckout(): Promise<CheckoutResponse> {
   const res = await apiFetch('/billing/checkout', { method: 'POST' });
   return res.json();
 }
+
+export async function getBillingPortal(): Promise<CheckoutResponse> {
+  const res = await apiFetch('/billing/portal', { method: 'GET' });
+  return res.json();
+}
 export async function me(): Promise<MeResponse> {
   const res = await apiFetch('/me', { method: 'GET' });
+  return res.json();
+}
+
+export type VerifyResponse = { ok: boolean; subscribed: boolean };
+
+export async function verifyCheckout(sessionId: string): Promise<VerifyResponse> {
+  const params = new URLSearchParams({ session_id: sessionId });
+  const res = await apiFetch(`/billing/verify?${params.toString()}`, { method: 'GET' });
+  if (!res.ok) {
+    let body: any = null;
+    try { body = await res.json(); } catch {}
+    const err: any = new Error('Verify failed');
+    err.status = res.status;
+    err.detail = body?.detail;
+    throw err;
+  }
+  return res.json();
+}
+
+// --- Feedback ---
+export type FeedbackContext = {
+  tone?: string;
+  version?: 'Gallery' | 'Manuscript' | 'Zen';
+  theme?: 'Paper' | 'Stone' | 'Ink' | 'Slate' | 'Mist';
+  poem?: string;
+  timezone?: string;
+  format?: '12h' | '24h' | 'auto';
+  path?: string;
+};
+export type FeedbackPayload = {
+  message: string;
+  includeContext?: boolean;
+  context?: FeedbackContext;
+};
+export type FeedbackResponse = { ok: boolean; emailed: boolean; logged: boolean };
+
+export async function sendFeedback(payload: FeedbackPayload): Promise<FeedbackResponse> {
+  const res = await apiFetch('/feedback', { method: 'POST', body: JSON.stringify({
+    message: payload.message,
+    includeContext: payload.includeContext ?? true,
+    context: payload.context,
+  }) });
+  if (!res.ok) {
+    let body: any = null;
+    try { body = await res.json(); } catch {}
+    const err: any = new Error('Feedback failed');
+    err.status = res.status;
+    err.detail = body?.detail;
+    throw err;
+  }
   return res.json();
 }

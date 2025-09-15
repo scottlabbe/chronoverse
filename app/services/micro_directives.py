@@ -65,7 +65,8 @@ COLORS = [
     "cobalt",
     "sage",
     "marigold",
-    "teal" "ivory",
+    "teal",
+    "ivory",
     "amber",
     "coral",
     "mint",
@@ -119,9 +120,9 @@ MATERIALS = [
 
 VOICES = [
     "second person ('you')",
+    "first person ('I')",
     "first plural ('we')",
-    "overheard dialogue",
-    "note-to-self",
+    "overheard dialogue (no speaker labels)",
 ]
 
 FORMS = [
@@ -273,7 +274,8 @@ def pick(minute_of_day: int, tone: str, salt: Optional[str] = None) -> Tuple[str
         candidates = [
             d
             for d in DIRECTIVES
-            if (d.allow_tones is None or tone in (d.allow_tones or set()))
+            if d.id != "voice"
+            and (d.allow_tones is None or tone in (d.allow_tones or set()))
         ]
 
     # 4) Avoid immediate repeats by id (light touch)

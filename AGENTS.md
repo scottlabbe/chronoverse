@@ -33,6 +33,11 @@ make build-frontend && make dev
 - PRs: include summary, rationale, screenshots/GIFs for UI changes, and steps to verify. Link related issues and note env or migration changes (`alembic` revision IDs).
 
 ## Security & Configuration Tips
-- Backend auth uses Supabase JWT. Set `SUPABASE_JWT_JWKS_URL` or `SUPABASE_JWT_SECRET` in `.env`.
-- Configure DB via `DATABASE_URL`. Run `make db-upgrade` after changing models.
-- The API serves built frontend from `web/dist`; in dev, run frontend separately.
+- Auth: Supabase JWT required on API routes. Set `SUPABASE_JWT_JWKS_URL` (RS256) and/or `SUPABASE_JWT_SECRET` (HS256). Pin issuer with `SUPABASE_ISS=https://<ref>.supabase.co/auth/v1`.
+- CORS: Use `CORS_ORIGINS=http://localhost:5173` in dev; set to your prod domains before deploy.
+- Rate limits & cache: Per-user/IP throttles via `USER_RL_PER_MIN`/`IP_RL_PER_MIN`; optional `REDIS_URL` enables shared cache/limits across instances.
+- Cost controls: Minute-level gating + singleflight ensure one model call per minute/tone/timezone; `forceNew` is ignored after first-minute debit.
+- Headers: Enable `ENABLE_HSTS=1` and `ENABLE_CSP=1` in prod; override `CSP_POLICY` if needed.
+- Docs/health: `/docs` only with `ENABLE_SWAGGER=1`. `/api/_db/health` returns `{ ok }`; protect with `HEALTH_TOKEN` if exposed.
+- DB & migrations: Configure `DATABASE_URL`. Run `make db-upgrade` after changing schema.
+- Frontend hosting: API can serve `web/dist`; in dev, run Vite separately.

@@ -153,6 +153,24 @@ def init_db():
                     "CREATE INDEX IF NOT EXISTS idx_usage_user_minute ON usage_events(user_id, minute_bucket)"
                 )
             )
+            # Feedback table for durable logging of user feedback
+            conn.execute(
+                text(
+                    """
+                CREATE TABLE IF NOT EXISTS feedback(
+                    ts_iso TEXT,
+                    user_id TEXT,
+                    email TEXT,
+                    message TEXT,
+                    include_context INT,
+                    context_json TEXT,
+                    user_agent TEXT,
+                    path TEXT,
+                    ip TEXT
+                )
+                    """
+                )
+            )
 
 
 def write_event(row: dict):
@@ -258,6 +276,43 @@ def today_cost_sum() -> float:
         )
         val = res.scalar()
         return float(val or 0.0)
+
+
+def write_feedback(row: dict) -> None:
+    """Persist a feedback row into the feedback table.
+    Expected keys: ts_iso, user_id, email, message, include_context (bool),
+    context (dict), user_agent, path, ip.
+    """
+    ts_iso = row.get("ts_iso") or _utc_now_iso()
+    include_context = 1 if row.get("include_context") else 0
+    ctx = row.get("context") or None
+    try:
+        context_json = (
+            json.dumps(ctx, ensure_ascii=False, separators=(",", ":")) if ctx else None
+        )
+    except Exception:
+        context_json = None
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO feedback(ts_iso, user_id, email, message, include_context, context_json, user_agent, path, ip)
+                VALUES (:ts_iso, :user_id, :email, :message, :include_context, :context_json, :user_agent, :path, :ip)
+                """
+            ),
+            {
+                "ts_iso": ts_iso,
+                "user_id": row.get("user_id"),
+                "email": row.get("email"),
+                "message": row.get("message"),
+                "include_context": include_context,
+                "context_json": context_json,
+                "user_agent": row.get("user_agent"),
+                "path": row.get("path"),
+                "ip": row.get("ip"),
+            },
+        )
 
 
 def record_usage_minute(

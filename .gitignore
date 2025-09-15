@@ -32,6 +32,7 @@ venv/
 # ---- Env / Secrets
 .env
 .env.*
+*.env.*
 !.env.example
 
 # ---- App data & exports
@@ -39,6 +40,9 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 export/
+data/postgres/
+data/feedback/
+
 # keep folders but ignore contents
 !data/.gitkeep
 !export/.gitkeep

@@ -1,6 +1,17 @@
 from alembic import context
 from logging.config import fileConfig
-from app.db import engine, is_sqlite
+from dotenv import load_dotenv
+
+# Ensure environment variables from .env are loaded before creating the engine
+load_dotenv()
+
+"""
+Alembic environment configuration.
+
+We load .env early, then import the application's DB engine lazily inside
+the run functions to ensure environment variables are applied before
+engine creation, and to satisfy import-order lint rules.
+"""
 
 # this Alembic Config object provides access to the values within the .ini file in use.
 config = context.config
@@ -13,6 +24,8 @@ target_metadata = None
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode (emit SQL to stdout/file, no DB connection)."""
+    from app.db import engine, is_sqlite  # noqa: F401
+
     url = str(engine.url)
     context.configure(
         url=url,
@@ -28,6 +41,8 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode (apply to a live DB connection)."""
+    from app.db import engine, is_sqlite  # noqa: F401
+
     with engine.connect() as connection:
         # Optional probe; uncomment if you want a fast fail when DB is unreachable
         # connection.execute(text("SELECT 1"))

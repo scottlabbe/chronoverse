@@ -44,6 +44,20 @@ class Settings:
     CORS_ORIGINS: List[str] = field(default_factory=lambda: ["*"])
     FREE_MINUTES: int = 180
     UPGRADE_PATH: str = "/api/billing/checkout"
+    # Stripe (server-side)
+    STRIPE_SECRET_KEY: str | None = None
+    STRIPE_PUBLISHABLE_KEY: str | None = None
+    PRICE_ID: str | None = None
+    PUBLIC_BASE_URL: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+    STRIPE_PORTAL_CONFIGURATION_ID: str | None = None
+    # SMTP (feedback email)
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int | None = None
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM: str | None = None
+    FEEDBACK_TO: str | None = None
 
 
 def get_settings() -> Settings:
@@ -78,4 +92,16 @@ def get_settings() -> Settings:
         CORS_ORIGINS=_get_list("CORS_ORIGINS", ["*"]),
         FREE_MINUTES=free_minutes,
         UPGRADE_PATH=upgrade_path,
+        STRIPE_SECRET_KEY=_get("STRIPE_SECRET_KEY"),
+        STRIPE_PUBLISHABLE_KEY=_get("STRIPE_PUBLISHABLE_KEY"),
+        PRICE_ID=_get("PRICE_ID"),
+        PUBLIC_BASE_URL=_get("PUBLIC_BASE_URL"),
+        STRIPE_WEBHOOK_SECRET=_get("STRIPE_WEBHOOK_SECRET"),
+        STRIPE_PORTAL_CONFIGURATION_ID=_get("STRIPE_PORTAL_CONFIGURATION_ID"),
+        SMTP_HOST=_get("SMTP_HOST"),
+        SMTP_PORT=(int(float(_get("SMTP_PORT", "0") or 0)) if _get("SMTP_PORT") else None),
+        SMTP_USER=_get("SMTP_USER"),
+        SMTP_PASSWORD=_get("SMTP_PASSWORD"),
+        SMTP_FROM=_get("SMTP_FROM") or _get("SMTP_USER"),
+        FEEDBACK_TO=_get("FEEDBACK_TO") or "scottlabbe123@gmail.com",
     )

@@ -2,12 +2,20 @@ from pydantic import BaseModel
 from typing import Literal, Optional, Any, Dict
 
 Tone = Literal[
-    "Whimsical", "Stoic", "Wistful", "Funny", "Haiku", "Noir", "Minimal", "Cosmic"
+    "Whimsical",
+    "Wistful",
+    "Funny",
+    "Noir",
+    "Minimal",
+    "Cosmic",
+    "Nature",
+    "Romantic",
+    "Spooky",
 ]
 
 
 class PoemRequest(BaseModel):
-    tone: Tone = "Stoic"
+    tone: Tone = "Wistful"
     timezone: str = "America/Chicago"  # client IANA tz
     format: Literal["12h", "24h", "auto"] = "auto"
     locale: str = "en-US"

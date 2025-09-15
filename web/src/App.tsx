@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { getPoem } from './lib/api';
+import { getPoem, createCheckout, me, getBillingPortal, verifyCheckout } from './lib/api';
+import { supabase } from './lib/supabase';
+import { Button } from './components/ui/button';
+import ControlsRail from './components/ControlsRail';
+import FeedbackDialog from './components/FeedbackDialog';
 
 // Utilities
 const detectTimeFormat = (): '12h' | '24h' => {
@@ -10,7 +14,13 @@ const detectTimeFormat = (): '12h' | '24h' => {
 
 const getToneFromStorage = (): string => {
   try {
-    return localStorage.getItem('cv:tone') || 'Wistful';
+    const stored = localStorage.getItem('cv:tone') || 'Wistful';
+    // Ensure stored tone is one of the supported options
+    if (!TONES.includes(stored)) {
+      try { localStorage.setItem('cv:tone', 'Wistful'); } catch {}
+      return 'Wistful';
+    }
+    return stored;
   } catch {
     return 'Wistful';
   }
@@ -23,9 +33,7 @@ const setToneInStorage = (tone: string): void => {
     // Silent fail
   }
 };
-
-
-const TONES = ['Whimsical', 'Stoic', 'Wistful', 'Funny', 'Haiku', 'Noir', 'Minimal', 'Cosmic'];
+const TONES = ['Whimsical', 'Wistful', 'Funny', 'Noir', 'Minimal', 'Cosmic', 'Nature', 'Romantic', 'Spooky'];
 const VERSIONS = ['Gallery', 'Manuscript', 'Zen'] as const;
 const THEMES = ['Paper', 'Stone', 'Ink', 'Slate', 'Mist'] as const;
 type Version = typeof VERSIONS[number];
@@ -111,8 +119,11 @@ export default function App() {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [showControls, setShowControls] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(getAutoFromStorage());
+  const [showFeedback, setShowFeedback] = useState(false);
   const tickTimeoutRef = useRef<number | undefined>(undefined);
   const inFlightRef = useRef<boolean>(false);
+  const [upgradeInfo, setUpgradeInfo] = useState<{ needed: boolean; used?: number; limit?: number }>({ needed: false });
+  const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
   
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -120,7 +131,16 @@ export default function App() {
   const versionButtonRef = useRef<HTMLButtonElement>(null);
   const themeMenuRef = useRef<HTMLDivElement>(null);
   const themeButtonRef = useRef<HTMLButtonElement>(null);
-  const poemRef = useRef<HTMLDivElement>(null);
+  const poemRef = useRef<HTMLDivElement>(null); // transition wrapper
+  const poemElRef = useRef<HTMLDivElement>(null); // actual poem element
+  const containerRef = useRef<HTMLDivElement>(null); // inner app container
+  const poemContainerRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null); // optional preview viewport wrapper
+
+  // Device preview (simulated viewport) and simulated presentation
+  const [previewDims, setPreviewDims] = useState<{w: number; h: number; name: string} | null>(null);
+  const [previewScale, setPreviewScale] = useState<number>(1);
+  const [simulatePresentation, setSimulatePresentation] = useState<boolean>(false);
 
   // --- Presentation mode state & Wake Lock ---
   const [isPresenting, setIsPresenting] = useState(false);
@@ -163,7 +183,8 @@ export default function App() {
     inFlightRef.current = true;
     try {
       setIsTransitioning(true);
-      await loadPoem(currentTone, true);
+      // Use cache for the current minute; do not force bypass
+      await loadPoem(currentTone, false);
     } finally {
       inFlightRef.current = false;
       scheduleNextTick();
@@ -177,7 +198,15 @@ export default function App() {
     try {
       const res = await getPoem({ tone, timezone, format, forceNew });
       setPoem(applyWidowGuard(res.poem));
-    } catch {
+      setUpgradeInfo({ needed: false });
+    } catch (err: any) {
+      const status = err?.status;
+      const detail = err?.detail;
+      if (status === 402 && detail && detail.reason === 'free_limit_reached') {
+        setUpgradeInfo({ needed: true, used: detail.minutesUsed, limit: detail.limit });
+      } else {
+        setUpgradeInfo({ needed: false });
+      }
       setPoem(applyWidowGuard('Time moves in mysterious ways...'));
     } finally {
       setIsLoading(false);
@@ -189,6 +218,57 @@ export default function App() {
   useEffect(() => {
     loadPoem(currentTone);
   }, []);
+
+  // If returning from Stripe Checkout, verify and refresh subscription state
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get('session_id');
+    if (!sid) return;
+    (async () => {
+      try { await verifyCheckout(sid); } catch {}
+      try {
+        const m = await me();
+        setIsSubscribed(!!m?.subscribed);
+        setUpgradeInfo({ needed: false });
+      } catch {}
+      // Remove session_id from the URL to keep things clean
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('session_id');
+        window.history.replaceState({}, '', url.toString());
+      } catch {}
+    })();
+  }, []);
+
+  // Query subscription status for showing Manage Billing
+  useEffect(() => {
+    me().then((m) => setIsSubscribed(!!m?.subscribed)).catch(() => setIsSubscribed(false));
+  }, []);
+
+  const handleUpgrade = async () => {
+    try {
+      const { url } = await createCheckout();
+      if (url) window.location.href = url;
+    } catch {}
+  };
+
+  const handleManageBilling = async () => {
+    try {
+      const { url } = await getBillingPortal();
+      if (url) {
+        window.location.href = url;
+      } else {
+        alert('Unable to open billing portal. Please try again or contact support.');
+      }
+    } catch {
+      alert('Unable to open billing portal. Please try again or contact support.');
+    }
+  };
+
+  const handleSignOut = async () => {
+    try { await supabase.auth.signOut(); } catch {}
+    window.location.href = '/';
+  };
 
   // Ensure default autoRefresh persisted once
   useEffect(() => {
@@ -206,7 +286,8 @@ export default function App() {
         // Fetch immediately on resume, then realign
         void (async () => {
           setIsTransitioning(true);
-          await loadPoem(currentTone, true);
+          // Use cache on resume to avoid redundant LLM calls
+          await loadPoem(currentTone, false);
           scheduleNextTick();
         })();
       }
@@ -238,7 +319,8 @@ export default function App() {
     setCurrentTone(newTone);
     setToneInStorage(newTone);
     
-    await loadPoem(newTone, true);
+    // Allow cache to serve the minute's poem for the new tone
+    await loadPoem(newTone, false);
   };
 
   // Handle version change
@@ -371,7 +453,7 @@ export default function App() {
     try {
       document.body.classList.add('presenting');
       setIsPresenting(true);
-      if (document.documentElement.requestFullscreen) {
+      if (!simulatePresentation && document.documentElement.requestFullscreen) {
         try { await document.documentElement.requestFullscreen(); } catch { /* ignore */ }
       }
       await requestWakeLock();
@@ -382,7 +464,7 @@ export default function App() {
 
   const exitPresentation = async () => {
     try {
-      if (document.fullscreenElement && document.exitFullscreen) {
+      if (!simulatePresentation && document.fullscreenElement && document.exitFullscreen) {
         try { await document.exitFullscreen(); } catch { /* ignore */ }
       }
     } finally {
@@ -444,41 +526,93 @@ export default function App() {
     switch (currentTheme) {
       case 'Paper':
         return {
-          background: '#faf9f7',
-          foreground: '#2c2c2c',
-          muted: '#8b8680',
-          menuBg: 'rgba(250, 249, 247, 0.95)'
-        };
+          background: '#FDF6F0',
+          foreground: '#262320',
+          muted: '#7E7369',
+          menuBg: 'rgba(253, 246, 240, 0.95)'
+        } as const;
       case 'Stone':
         return {
-          background: '#f8f9fa',
-          foreground: '#1a1a1a',
-          muted: '#6c757d',
-          menuBg: 'rgba(248, 249, 250, 0.95)'
-        };
+          background: '#ECEFF1',
+          foreground: '#1F2328',
+          muted: '#66707A',
+          menuBg: 'rgba(236, 239, 241, 0.95)'
+        } as const;
       case 'Ink':
         return {
-          background: '#0a0a0a',
-          foreground: '#f5f5f5',
+          background: '#0A0A0A',
+          foreground: '#F5F5F5',
           muted: '#888888',
           menuBg: 'rgba(10, 10, 10, 0.95)'
-        };
-      case 'Slate':
+        } as const;
+      case 'Slate': // replaced with "Charcoal" palette
         return {
-          background: '#1e293b',
-          foreground: '#f1f5f9',
-          muted: '#94a3b8',
-          menuBg: 'rgba(30, 41, 59, 0.95)'
-        };
+          background: '#131417',
+          foreground: '#ECEDEE',
+          muted: '#9BA1A6',
+          menuBg: 'rgba(19, 20, 23, 0.95)'
+        } as const;
       case 'Mist':
         return {
-          background: '#fbfcfd',
-          foreground: '#1f2937',
-          muted: '#6b7280',
-          menuBg: 'rgba(251, 252, 253, 0.95)'
-        };
+          background: '#F5F9FF',
+          foreground: '#1C2733',
+          muted: '#6B7C8F',
+          menuBg: 'rgba(245, 249, 255, 0.95)'
+        } as const;
     }
   };
+
+  // Parse query params for preview and simulated presentation
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const present = p.get('present');
+      const preview = p.get('preview'); // e.g., iphone8 | ipad9 | ipad11 | tablet10
+      const orient = (p.get('orientation') || 'portrait').toLowerCase();
+      const scaleMode = (p.get('scale') || 'fit').toLowerCase();
+
+      if (present === '1' || present === 'true') {
+        setSimulatePresentation(true);
+        document.body.classList.add('presenting');
+        setIsPresenting(true);
+      }
+
+      const dimsFor = (key: string | null): {w: number; h: number; name: string} | null => {
+        switch ((key || '').toLowerCase()) {
+          case 'iphone8': return { w: 375, h: 667, name: 'iPhone 8' };
+          case 'iphonese': return { w: 320, h: 568, name: 'iPhone SE' };
+          case 'ipad9': return { w: 768, h: 1024, name: 'iPad 9.7”' };
+          case 'ipad10':
+          case 'ipad11': return { w: 834, h: 1194, name: 'iPad 11”' };
+          case 'tablet10': return { w: 800, h: 1280, name: 'Android 10”' };
+          default: return null;
+        }
+      };
+
+      const dd = dimsFor(preview);
+      if (dd) {
+        const d = (orient === 'landscape') ? { w: dd.h, h: dd.w, name: `${dd.name} (landscape)` } : dd;
+        setPreviewDims(d);
+        const recalc = () => {
+          if (!d) return;
+          if (scaleMode === 'fit') {
+            const sw = window.innerWidth / d.w;
+            const sh = window.innerHeight / d.h;
+            setPreviewScale(Math.min(sw, sh));
+          } else {
+            setPreviewScale(1);
+          }
+        };
+        recalc();
+        window.addEventListener('resize', recalc);
+        window.addEventListener('orientationchange', recalc);
+        return () => {
+          window.removeEventListener('resize', recalc);
+          window.removeEventListener('orientationchange', recalc);
+        };
+      }
+    } catch {}
+  }, []);
 
   // Version-specific styles and layouts
   const getVersionStyles = () => {
@@ -487,8 +621,8 @@ export default function App() {
     switch (currentVersion) {
       case 'Gallery':
         return {
-          container: "min-h-screen flex items-center justify-center relative",
-          poemContainer: "max-w-4xl w-full px-20 py-40",
+          container: isPresenting ? "min-h-[100svh] flex items-center justify-center relative" : "min-h-screen flex items-center justify-center relative",
+          poemContainer: isPresenting ? "w-full px-6 py-6" : "max-w-4xl w-full px-20 py-40",
           poem: "text-4xl leading-loose tracking-wide whitespace-pre-line select-text text-center",
           font: { fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif', letterSpacing: '0.03em', lineHeight: '1.618' },
           loading: "text-4xl animate-pulse",
@@ -496,8 +630,8 @@ export default function App() {
         };
       case 'Manuscript':
         return {
-          container: "min-h-screen flex items-start justify-center relative pt-24",
-          poemContainer: "max-w-2xl w-full px-12 py-16",
+          container: isPresenting ? "min-h-[100svh] flex items-center justify-center relative" : "min-h-screen flex items-start justify-center relative pt-24",
+          poemContainer: isPresenting ? "w-full px-6 py-6" : "max-w-2xl w-full px-12 py-16",
           poem: "text-2xl leading-relaxed tracking-normal whitespace-pre-line select-text text-left",
           font: { fontFamily: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif', letterSpacing: '0.01em', lineHeight: '1.75' },
           loading: "text-2xl animate-pulse",
@@ -505,8 +639,8 @@ export default function App() {
         };
       case 'Zen':
         return {
-          container: "min-h-screen flex items-center justify-center relative",
-          poemContainer: "max-w-xl w-full px-8 py-32",
+          container: isPresenting ? "min-h-[100svh] flex items-center justify-center relative" : "min-h-screen flex items-center justify-center relative",
+          poemContainer: isPresenting ? "w-full px-6 py-6" : "max-w-xl w-full px-8 py-32",
           poem: "text-xl leading-loose tracking-wide whitespace-pre-line select-text text-center",
           font: { fontFamily: 'ui-sans-serif, system-ui, sans-serif', letterSpacing: '0.05em', lineHeight: '2', fontWeight: '300' },
           loading: "text-xl animate-pulse",
@@ -517,12 +651,107 @@ export default function App() {
 
   const styles = getVersionStyles();
 
-  return (
-    <div 
+  // Sync CSS variables for background/foreground with the chosen theme colors
+  useEffect(() => {
+    const root = document.documentElement;
+    try {
+      root.style.setProperty('--background', styles.colors.background);
+      root.style.setProperty('--foreground', styles.colors.foreground);
+    } catch {}
+  }, [styles.colors.background, styles.colors.foreground]);
+
+  // Fit poem to viewport (presentation or simulated preview) so it never overflows the screen
+  useEffect(() => {
+    const el = poemElRef.current;
+    const pc = poemContainerRef.current;
+    if (!el) return;
+
+    const computeAvailHeight = () => {
+      const host = previewRef.current || pc || containerRef.current;
+      if (!host) return window.innerHeight;
+      const h = host.clientHeight || window.innerHeight;
+      try {
+        const cs = window.getComputedStyle(host);
+        const pad = (parseFloat(cs.paddingTop || '0') || 0) + (parseFloat(cs.paddingBottom || '0') || 0);
+        return Math.max(0, h - pad);
+      } catch {
+        return h;
+      }
+    };
+
+    const fitOnce = () => {
+      if (!isPresenting && !previewDims) {
+        // Clear any previous fit overrides
+        el.style.removeProperty('--poem-fit-size');
+        el.style.removeProperty('letterSpacing');
+        el.style.removeProperty('lineHeight');
+        return;
+      }
+
+      const avail = Math.max(0, computeAvailHeight() - 8); // small safety margin
+      const MIN = 20; // px
+      const MAX = 46; // px (cap consistent with globals CSS clamp)
+
+      let low = MIN;
+      let high = MAX;
+      let best = MIN;
+
+      // Reset tightening overrides before search
+      el.style.removeProperty('letterSpacing');
+      // Keep line-height consistent with presentation target during fitting
+      el.style.lineHeight = '1.3';
+
+      for (let i = 0; i < 9 && low <= high; i++) {
+        const mid = Math.floor((low + high) / 2);
+        el.style.setProperty('--poem-fit-size', `${mid}px`);
+        const needed = el.scrollHeight;
+        if (needed <= avail) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      el.style.setProperty('--poem-fit-size', `${best}px`);
+
+      // If still overflows at min size, apply gentle tightening
+      if (el.scrollHeight > avail) {
+        el.style.letterSpacing = '-0.005em';
+        el.style.lineHeight = '1.25';
+        // Try a final nudge down within safe bounds
+        const final = Math.max(MIN - 2, 18);
+        el.style.setProperty('--poem-fit-size', `${final}px`);
+      }
+    };
+
+    // Debounce and schedule
+    let t: number | undefined;
+    const schedule = () => {
+      if (t) window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        requestAnimationFrame(fitOnce);
+      }, 50);
+    };
+
+    schedule();
+    window.addEventListener('resize', schedule);
+    window.addEventListener('orientationchange', schedule);
+    document.addEventListener('visibilitychange', schedule);
+    return () => {
+      if (t) window.clearTimeout(t);
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('orientationchange', schedule);
+      document.removeEventListener('visibilitychange', schedule);
+    };
+  }, [poem, isPresenting, styles.poemContainer]);
+
+  const AppBody = (
+    <div
+      ref={containerRef}
       className={styles.container}
-      style={{ 
-        backgroundColor: styles.colors.background, 
-        color: styles.colors.foreground 
+      style={{
+        backgroundColor: styles.colors.background,
+        color: styles.colors.foreground,
       }}
       onMouseMove={() => setShowControls(true)}
       onMouseLeave={() => !isMenuOpen && !isVersionMenuOpen && !isThemeMenuOpen && setShowControls(false)}
@@ -621,21 +850,19 @@ export default function App() {
         </div>
       </div>
 
-      {/* Presentation Toggle - Bottom left corner */}
-      <div className="fixed bottom-8 left-8">
-        <div className="relative">
-          <button
-            onClick={async () => { isPresenting ? await exitPresentation() : await enterPresentation(); }}
-            className={`transition-all duration-700 ease-out ${
-              showControls ? 'opacity-30 hover:opacity-60' : 'opacity-0 hover:opacity-30'
-            } text-xs tracking-wider lowercase`}
-            style={{ color: styles.colors.muted }}
-            aria-pressed={isPresenting}
-          >
-            {isPresenting ? 'exit' : 'present'}
-          </button>
-        </div>
-      </div>
+      {/* Unified controls */}
+      <ControlsRail
+        showControls={showControls}
+        isPresenting={isPresenting}
+        onTogglePresent={async () => { isPresenting ? await exitPresentation() : await enterPresentation(); }}
+        isSubscribed={isSubscribed}
+        onUpgrade={handleUpgrade}
+        onManageBilling={handleManageBilling}
+        onSignOut={handleSignOut}
+        onOpenFeedback={() => setShowFeedback(true)}
+        mutedColor={styles.colors.muted}
+        menuBg={styles.colors.menuBg}
+      />
 
       {/* Tone Selector - Bottom right corner */}
       <div className="fixed bottom-8 right-8">
@@ -681,11 +908,13 @@ export default function App() {
               </div>
             </div>
           )}
-        </div>
+      </div>
       </div>
 
+      
+
       {/* Poem Display */}
-      <div className={styles.poemContainer}>
+      <div className={styles.poemContainer} ref={poemContainerRef}>
         {isLoading ? (
           <div className={currentVersion === 'Manuscript' ? 'text-left' : 'text-center'}>
             <div 
@@ -704,19 +933,101 @@ export default function App() {
                 : 'opacity-100 blur-0 transform translate-y-0'
             }`}
           >
-            <div 
-              className={styles.poem}
-              data-poem
-              style={{
-                ...styles.font,
-                color: styles.colors.foreground
-              }}
-            >
-              {poem}
-            </div>
+            {upgradeInfo.needed ? (
+              <div className={styles.poem} style={{ color: styles.colors.foreground, textAlign: 'center' }}>
+                <div style={{ opacity: 0.7, marginBottom: '0.75rem' }}>
+                  You’ve reached the free tier limit
+                  {typeof upgradeInfo.used === 'number' && typeof upgradeInfo.limit === 'number' ? (
+                    <span>{` (${upgradeInfo.used}/${upgradeInfo.limit} minutes)`}</span>
+                  ) : null}
+                  .
+                </div>
+                <div className="flex items-center justify-center gap-3 mt-2">
+                  <Button onClick={handleUpgrade}>upgrade</Button>
+                  <Button
+                    variant="outline"
+                    onClick={async () => { try { await me(); } catch {}; await loadPoem(currentTone, false); }}
+                  >
+                    already upgraded? try again
+                  </Button>
+                </div>
+              </div>
+            ) : (() => {
+              const isDarkTheme = currentTheme === 'Ink' || currentTheme === 'Slate';
+              const bumpLetterSpacing = (ls: string, deltaEm = 0.01) => {
+                const m = /^(-?\d*\.?\d+)em$/.exec((ls || '').trim());
+                if (!m) return ls;
+                const v = parseFloat(m[1]);
+                return `${(v + deltaEm).toFixed(3)}em`;
+              };
+              const fontStyle: any = { ...styles.font };
+              if (isDarkTheme && typeof fontStyle.letterSpacing === 'string') {
+                fontStyle.letterSpacing = bumpLetterSpacing(fontStyle.letterSpacing, 0.01);
+              }
+              const lines = poem.split(/\r?\n/);
+              return (
+                <div 
+                  className={styles.poem}
+                  data-poem
+                  style={{
+                    ...fontStyle,
+                    ...(isPresenting ? { lineHeight: 1.3 } : {}),
+                    color: styles.colors.foreground
+                  }}
+                  ref={poemElRef}
+                >
+                  {lines.map((line, idx) => {
+                    const isBlank = line.trim().length === 0;
+                    return (
+                      <span
+                        key={`poem-line-${idx}`}
+                        className="poem-line"
+                        aria-hidden={isBlank || undefined}
+                      >
+                        {isBlank ? '\u00A0' : line}
+                      </span>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
+      {/* Feedback Dialog */}
+      <FeedbackDialog
+        open={showFeedback}
+        onOpenChange={setShowFeedback}
+        tone={currentTone}
+        version={currentVersion}
+        theme={currentTheme}
+        poem={poem}
+        mutedColor={styles.colors.muted}
+      />
     </div>
   );
+
+  // When preview is active, wrap the app in a simulated viewport with optional scale-to-fit
+  if (previewDims) {
+    return (
+      <div className="min-h-[100svh] w-full grid place-items-center bg-black/10">
+        <div
+          ref={previewRef}
+          style={{
+            width: `${previewDims.w}px`,
+            height: `${previewDims.h}px`,
+            transform: `scale(${previewScale})`,
+            transformOrigin: 'top left',
+            boxShadow: '0 0 0 1px rgba(0,0,0,0.2)',
+            overflow: 'hidden',
+            background: styles.colors.background,
+          }}
+        >
+          {AppBody}
+        </div>
+      </div>
+    );
+  }
+
+  return AppBody;
 }
