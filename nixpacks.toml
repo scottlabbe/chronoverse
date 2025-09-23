@@ -2,8 +2,11 @@
 nixPkgs = ["python311Full", "nodejs_20"]
 
 [phases.install]
-# Extend the default install steps (creates venv + pip install) and then run npm ci
-cmds = ["...", "npm --prefix web ci"]
+cmds = [
+  "python3 -m pip install --upgrade pip",
+  "python3 -m pip install -r requirements.txt",
+  "npm --prefix web ci"
+]
 
 [phases.build]
 cmds = [
