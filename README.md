@@ -12,7 +12,7 @@ Minimalist, living “time poems.” Each visit (or minute) generates a short po
 - **Model switching**: `gpt-5`, `gpt-5-mini`, `gpt-5-nano`
 - **GPT-5 controls**: `text.verbosity`, `reasoning.effort` (Responses API)
 - **Caching**: in-memory, per minute+tone
-- **Logging**: SQLite events DB with full response snapshot in JSON for later analysis
+- **Logging**: SQL-backed events table with full response snapshot in JSON for later analysis
 - **Swagger UI**: interactive testing at `/docs` (when enabled via `ENABLE_SWAGGER=1`)
 
 ---
@@ -32,8 +32,8 @@ chronoverse/
 │  ├─ core/
 │  │  └─ config.py             # pydantic-settings
 │  ├─ data/
-│  │  ├─ events.py             # SQLite writes, schema
-│  │  └─ events.db             # SQLite database (created at runtime)
+│  │  ├─ events.py             # Events/usage logging helpers (SQLAlchemy)
+│  │  └─ subscriptions.py      # Subscription persistence helpers
 │  └─ core/
 │     └─ types.py              # Pydantic request/response types (PoemRequest/PoemResponse)
 ├─ web/
@@ -187,10 +187,15 @@ Enable `ADAPTER_DEBUG=1` to log a compact structural peek so you can see exactly
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5433/postgres
 uvicorn app.main:app --reload
 # Swagger UI:
 # http://127.0.0.1:8000/docs
 ```
+
+`make pg-up` launches a local Postgres instance via Docker Compose listening on
+`localhost:5433` (matching the URL above). Update the connection string if you use
+another database or credentials.
 
 ### Node (frontend)
 
@@ -223,6 +228,8 @@ If a previous `package.json` contained platform-specific packages (e.g., `@rollu
 
 ```dotenv
 # Required (Backend)
+DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/chronoverse
+# For quick local testing you can point to sqlite:///path/to.db, but production uses Postgres.
 OPENAI_API_KEY=sk-...
 SUPABASE_JWT_JWKS_URL=https://<project-ref>.supabase.co/auth/v1/jwks
 # If your project still issues HS256 tokens, also set:
@@ -317,54 +324,27 @@ If SMTP is not configured or sending fails, feedback is still saved to the DB an
 
 ---
 
-## Events Database (SQLite)
+## Events & Usage Tables
 
-**Location:** `data/events.db`  
-**Schema:**
-```sql
-CREATE TABLE events(
-  ts_iso TEXT,
-  request_id TEXT,
-  status TEXT,              -- ok | fallback | shadow (if enabled)
-  model TEXT,
-  tone TEXT,
-  timezone TEXT,
-  prompt_tokens INT,
-  completion_tokens INT,
-  cost_usd REAL,
-  cached INT,               -- 0/1
-  extra_json TEXT           -- full response snapshot (poem, response_id, latency_ms, params_used, daypart, etc.)
-);
-```
+The `events`, `usage_events`, and `feedback` tables live in the database referenced by
+`DATABASE_URL` (Postgres in production). The schema is created automatically during
+startup (and mirrored in Alembic migrations) so no extra manual step is required.
 
-**Export to CSV (full):**
+Need a quick peek? On Postgres you can run:
+
 ```bash
-sqlite3 -header -csv data/events.db "
-SELECT
-  ts_iso,
-  request_id,
-  status,
-  model,
-  tone,
-  timezone,
-  cached,
-  prompt_tokens,
-  completion_tokens,
-  cost_usd,
-  json_extract(extra_json,'$.poem')        AS poem,
-  json_extract(extra_json,'$.daypart')     AS daypart,
-  json_extract(extra_json,'$.response_id') AS response_id,
-  json_extract(extra_json,'$.latency_ms')  AS latency_ms
-FROM events
-ORDER BY ts_iso;
-" > export/poems_full.csv
+psql "$DATABASE_URL" -c "SELECT ts_iso, status, model, tone, cached FROM events ORDER BY ts_iso DESC LIMIT 5;"
+psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM usage_events;"
 ```
 
-**Quick counts & peek:**
+During development, `scripts/db_status.py` prints the active dialect plus table-presence checks:
+
 ```bash
-sqlite3 data/events.db "SELECT COUNT(*) FROM events;"
-sqlite3 data/events.db "SELECT ts_iso,status,model,cached,substr(extra_json,1,160) FROM events ORDER BY rowid DESC LIMIT 5;"
+make db-status
 ```
+
+If you intentionally point `DATABASE_URL` at a SQLite file (local testing), the helper will
+create it on startup and all of the same tables and queries apply.
 
 ---
 
@@ -415,7 +395,7 @@ Response:
 Behavior:
 - Requires Supabase JWT (same as other API routes).
 - Rate limited (per-IP and per-user, shared with app limits).
-- Always logs to SQLite `data/events.db` in a `feedback` table; attempts to email to `FEEDBACK_TO`.
+- Always logs to the `feedback` table in your configured database; attempts to email to `FEEDBACK_TO`.
 
 ---
 
@@ -493,7 +473,7 @@ git push -u origin main
 
 ## Deployment
 
-- **Replit / simple VM**: run FastAPI with `uvicorn`, host frontend as static build or keep Vite dev server behind a reverse proxy for local
+- **Replit / simple VM**: run FastAPI with `uvicorn`; build the frontend (`npm --prefix web run build`) so FastAPI can serve `web/build` as static assets, or keep the Vite dev server behind a reverse proxy for local-only workflows
 - Ensure `OPENAI_API_KEY` & other envs are set securely
 - Consider a small process manager (e.g., `pm2`, `systemd`) for `uvicorn`
 

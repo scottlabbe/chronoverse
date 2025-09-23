@@ -82,6 +82,7 @@ export default function FeedbackDialog({ open, onOpenChange, tone, version, them
             rows={5}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            className="bg-white text-black placeholder:text-neutral-500 dark:bg-white dark:text-black"
           />
           <label className="flex items-center gap-3 select-none">
             <Switch checked={include} onCheckedChange={(v: boolean) => setInclude(v)} />

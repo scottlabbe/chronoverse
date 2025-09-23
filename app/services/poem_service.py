@@ -67,13 +67,14 @@ def make_prompt(
 ) -> str:
     style = TONE_STYLE[tone]
     return (
-        "You are a Master Poet writing brief, time-aware poems.\n"
+        "You are a Master Poet writing relatable, brief, time-aware poems.\n"
         "<<RULES>>\n"
         "- Write a short poem that includes the time exactly once.\n"
         "- Write the time anywhere in the poem (number or english form).\n"
-        "- Length: ≤ 3 lines with \n as appropriate.\n"
-        "- Voice: punchy, accessible; prefer concrete images and active verbs.\n"
-        "- Output the poem only with \n as appropriate.\n"
+        "- Length: ≤ 3 lines, under 160 characters.\n"
+        "- Format: include line breaks (\n) as appropriate.\n"
+        "- Voice: relatable, time-of-day-appropriate lanugage.\n"
+        "- Output the poem only with line breaks (\n) as appropriate.\n"
         f"<<INPUT>>\n"
         f"time: {time_used}\n"
         f"daypart: {daypart}\n"

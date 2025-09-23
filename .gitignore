@@ -54,6 +54,7 @@ logs/
 # ---- Node / Vite (frontend)
 web/node_modules/
 web/dist/
+web/build/
 web/.vite/
 web/.eslintcache
 web/coverage/

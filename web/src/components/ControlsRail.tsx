@@ -9,6 +9,8 @@ type Props = {
   onManageBilling: () => void;
   onSignOut: () => void;
   onOpenFeedback?: () => void;
+  onOpenShare?: () => void;
+  canShare: boolean;
   mutedColor: string;
   menuBg: string;
 };
@@ -22,6 +24,8 @@ export default function ControlsRail({
   onManageBilling,
   onSignOut,
   onOpenFeedback,
+  onOpenShare,
+  canShare,
   mutedColor,
   menuBg,
 }: Props) {
@@ -79,6 +83,21 @@ export default function ControlsRail({
                 role="menuitem"
               >
                 {isPresenting ? 'exit' : 'present'}
+              </button>
+              <button
+                onClick={() => {
+                  if (!canShare) return;
+                  onOpenShare?.();
+                  setOpen(false);
+                }}
+                disabled={!canShare}
+                className={`text-xs tracking-wider lowercase transition-all duration-300 text-left py-1 ${
+                  canShare ? 'opacity-80 hover:opacity-100' : 'opacity-30 cursor-not-allowed'
+                }`}
+                style={{ color: mutedColor }}
+                role="menuitem"
+              >
+                share
               </button>
               <button
                 onClick={() => { onOpenFeedback?.(); setOpen(false); }}

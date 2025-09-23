@@ -11,7 +11,13 @@ except Exception:
 from sqlalchemy import create_engine, event
 
 DB_ECHO = os.getenv("DB_ECHO") == "1"
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/events.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is required; set it to your Postgres URL "
+        "(or an explicit sqlite:/// path for local/testing)."
+    )
 
 
 def _ensure_dir_for_sqlite(url: str) -> None:

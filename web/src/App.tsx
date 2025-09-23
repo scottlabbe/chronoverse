@@ -1,15 +1,48 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { getPoem, createCheckout, me, getBillingPortal, verifyCheckout } from './lib/api';
 import { supabase } from './lib/supabase';
 import { Button } from './components/ui/button';
 import ControlsRail from './components/ControlsRail';
 import FeedbackDialog from './components/FeedbackDialog';
+import SharePoemDialog from './components/SharePoemDialog';
 
 // Utilities
 const detectTimeFormat = (): '12h' | '24h' => {
   const testDate = new Date('2023-01-01 13:00:00');
   const formatted = testDate.toLocaleTimeString();
   return formatted.includes('PM') || formatted.includes('AM') ? '12h' : '24h';
+};
+
+const TEXT_INPUT_TYPES = new Set([
+  'text',
+  'search',
+  'url',
+  'tel',
+  'email',
+  'password',
+  'number',
+]);
+
+const isEditableEventTarget = (target: EventTarget | null): boolean => {
+  if (!target) return false;
+  const element = target as HTMLElement;
+  if (typeof element.tagName !== 'string') return false;
+  if (element.isContentEditable) return true;
+
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === 'textarea') {
+    const textarea = element as HTMLTextAreaElement;
+    return !textarea.readOnly && !textarea.disabled;
+  }
+
+  if (tagName === 'input') {
+    const input = element as HTMLInputElement;
+    if (input.readOnly || input.disabled) return false;
+    const type = input.type || 'text';
+    return TEXT_INPUT_TYPES.has(type);
+  }
+
+  return false;
 };
 
 const getToneFromStorage = (): string => {
@@ -36,8 +69,23 @@ const setToneInStorage = (tone: string): void => {
 const TONES = ['Whimsical', 'Wistful', 'Funny', 'Noir', 'Minimal', 'Cosmic', 'Nature', 'Romantic', 'Spooky'];
 const VERSIONS = ['Gallery', 'Manuscript', 'Zen'] as const;
 const THEMES = ['Paper', 'Stone', 'Ink', 'Slate', 'Mist'] as const;
+const SHARE_STYLES = ['classic', 'polaroid'] as const;
 type Version = typeof VERSIONS[number];
 type Theme = typeof THEMES[number];
+type ShareStyle = typeof SHARE_STYLES[number];
+
+type ShareSnapshot = {
+  poem: string;
+  tone: string;
+  version: Version;
+  theme: Theme;
+  colors: {
+    background: string;
+    foreground: string;
+    muted: string;
+  };
+  font: Partial<CSSProperties>;
+};
 
 const getVersionFromStorage = (): Version => {
   try {
@@ -68,6 +116,23 @@ const getThemeFromStorage = (): Theme => {
 const setThemeInStorage = (theme: Theme): void => {
   try {
     localStorage.setItem('cv:theme', theme);
+  } catch {
+    // Silent fail
+  }
+};
+
+const getShareStyleFromStorage = (): ShareStyle => {
+  try {
+    const stored = localStorage.getItem('cv:share-style');
+    return SHARE_STYLES.includes(stored as ShareStyle) ? (stored as ShareStyle) : 'classic';
+  } catch {
+    return 'classic';
+  }
+};
+
+const setShareStyleInStorage = (style: ShareStyle): void => {
+  try {
+    localStorage.setItem('cv:share-style', style);
   } catch {
     // Silent fail
   }
@@ -120,6 +185,9 @@ export default function App() {
   const [showControls, setShowControls] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(getAutoFromStorage());
   const [showFeedback, setShowFeedback] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareSnapshot, setShareSnapshot] = useState<ShareSnapshot | null>(null);
+  const [shareStyle, setShareStyle] = useState<ShareStyle>(getShareStyleFromStorage());
   const tickTimeoutRef = useRef<number | undefined>(undefined);
   const inFlightRef = useRef<boolean>(false);
   const [upgradeInfo, setUpgradeInfo] = useState<{ needed: boolean; used?: number; limit?: number }>({ needed: false });
@@ -268,6 +336,39 @@ export default function App() {
   const handleSignOut = async () => {
     try { await supabase.auth.signOut(); } catch {}
     window.location.href = '/';
+  };
+
+  const handleOpenShare = () => {
+    if (!poem.trim()) return;
+    const snapshotFont = computePoemFontStyle();
+    setShareSnapshot({
+      poem,
+      tone: currentTone,
+      version: currentVersion,
+      theme: currentTheme,
+      colors: {
+        background: styles.colors.background,
+        foreground: styles.colors.foreground,
+        muted: styles.colors.muted,
+      },
+      font: snapshotFont,
+    });
+    setShareOpen(true);
+  };
+
+  const handleShareOpenChange = (next: boolean) => {
+    if (!next) {
+      setShareOpen(false);
+      setShareSnapshot(null);
+    } else {
+      setShareOpen(true);
+    }
+  };
+
+  const handleShareStyleChange = (style: ShareStyle) => {
+    if (style === shareStyle) return;
+    setShareStyle(style);
+    setShareStyleInStorage(style);
   };
 
   // Ensure default autoRefresh persisted once
@@ -503,6 +604,8 @@ export default function App() {
   // Keyboard shortcuts: F toggle fullscreen/presentation, N new poem, Esc exit
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (isEditableEventTarget(e.target)) return;
       if (e.key === 'F' || e.key === 'f') {
         e.preventDefault();
         if (isPresenting) await exitPresentation(); else await enterPresentation();
@@ -650,6 +753,22 @@ export default function App() {
   };
 
   const styles = getVersionStyles();
+
+  const bumpLetterSpacing = (ls: string, deltaEm = 0.01) => {
+    const match = /^(-?\d*\.?\d+)em$/.exec((ls || '').trim());
+    if (!match) return ls;
+    const value = parseFloat(match[1]);
+    return `${(value + deltaEm).toFixed(3)}em`;
+  };
+
+  const computePoemFontStyle = () => {
+    const font: any = { ...styles.font };
+    const isDarkTheme = currentTheme === 'Ink' || currentTheme === 'Slate';
+    if (isDarkTheme && typeof font.letterSpacing === 'string') {
+      font.letterSpacing = bumpLetterSpacing(font.letterSpacing, 0.01);
+    }
+    return font;
+  };
 
   // Sync CSS variables for background/foreground with the chosen theme colors
   useEffect(() => {
@@ -860,6 +979,8 @@ export default function App() {
         onManageBilling={handleManageBilling}
         onSignOut={handleSignOut}
         onOpenFeedback={() => setShowFeedback(true)}
+        onOpenShare={handleOpenShare}
+        canShare={poem.trim().length > 0}
         mutedColor={styles.colors.muted}
         menuBg={styles.colors.menuBg}
       />
@@ -953,17 +1074,7 @@ export default function App() {
                 </div>
               </div>
             ) : (() => {
-              const isDarkTheme = currentTheme === 'Ink' || currentTheme === 'Slate';
-              const bumpLetterSpacing = (ls: string, deltaEm = 0.01) => {
-                const m = /^(-?\d*\.?\d+)em$/.exec((ls || '').trim());
-                if (!m) return ls;
-                const v = parseFloat(m[1]);
-                return `${(v + deltaEm).toFixed(3)}em`;
-              };
-              const fontStyle: any = { ...styles.font };
-              if (isDarkTheme && typeof fontStyle.letterSpacing === 'string') {
-                fontStyle.letterSpacing = bumpLetterSpacing(fontStyle.letterSpacing, 0.01);
-              }
+              const fontStyle: any = computePoemFontStyle();
               const lines = poem.split(/\r?\n/);
               return (
                 <div 
@@ -995,6 +1106,22 @@ export default function App() {
         )}
       </div>
       {/* Feedback Dialog */}
+      <SharePoemDialog
+        open={!!shareSnapshot && shareOpen}
+        onOpenChange={handleShareOpenChange}
+        poem={shareSnapshot?.poem ?? poem}
+        tone={shareSnapshot?.tone ?? currentTone}
+        version={shareSnapshot?.version ?? currentVersion}
+        theme={shareSnapshot?.theme ?? currentTheme}
+        colors={shareSnapshot?.colors ?? {
+          background: styles.colors.background,
+          foreground: styles.colors.foreground,
+          muted: styles.colors.muted,
+        }}
+        fontStyle={shareSnapshot?.font ?? computePoemFontStyle()}
+        styleVariant={shareStyle}
+        onStyleChange={handleShareStyleChange}
+      />
       <FeedbackDialog
         open={showFeedback}
         onOpenChange={setShowFeedback}

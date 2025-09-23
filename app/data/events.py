@@ -1,4 +1,4 @@
-# Events & usage logging (SQLite-first, Postgres-ready)
+# Events & usage logging (SQLite + Postgres)
 # Tables:
 #   events(
 #     ts_iso TEXT NOT NULL,
@@ -25,68 +25,37 @@
 #     request_id TEXT,
 #     PRIMARY KEY(user_id, minute_bucket)
 #   )
-import sqlite3
 import os
 import datetime as dt
 import json
-import time
 import threading
 from typing import Optional
+import sqlite3
+
 from sqlalchemy import text
-from app.db import engine, is_postgres
+
+from app.db import engine, is_postgres, is_sqlite
 
 # ---- Helpers & module state ----
 _INIT_LOCK = threading.Lock()
 
+_SQLITE_PATH: Optional[str] = None
+if is_sqlite():
+    try:
+        _SQLITE_PATH = engine.url.database
+    except Exception:
+        _SQLITE_PATH = None
 
 def _utc_now_iso() -> str:
     """UTC timestamp, second precision, with trailing 'Z'."""
     return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 
-def _ensure_pragmas(c: sqlite3.Connection) -> None:
-    """Light tuning to reduce 'database is locked' and improve durability."""
-    try:
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA busy_timeout=5000")  # 5s busy timeout across writers
-    except Exception:
-        pass
-
-
-def _execute_retry(
-    c: sqlite3.Connection, sql: str, params: tuple = (), sleeps=(0.01, 0.05, 0.1)
-):
-    """Execute SQL with tiny backoff if the database is locked (SQLite only)."""
-    for i, delay in enumerate((0.0, *sleeps)):
-        try:
-            if delay:
-                time.sleep(delay)
-            return c.execute(sql, params)
-        except sqlite3.OperationalError as e:
-            msg = str(e).lower()
-            if "locked" in msg and i < len(sleeps):
-                continue
-            raise
-
-
-# Allow override via DATABASE_URL when using SQLite (sqlite:///path/to.db). Postgres will be added later.
-_DB_URL = os.getenv("DATABASE_URL")
-if _DB_URL and _DB_URL.startswith("sqlite"):
-    # Accept sqlite:///relative/path.db or sqlite:////absolute/path.db
-    _DB = _DB_URL.split("sqlite:///", 1)[-1]
-else:
-    _DB = "data/events.db"
-
-
-def _conn():
-    c = sqlite3.connect(_DB, check_same_thread=False)
-    _ensure_pragmas(c)
-    return c
-
-
 def init_db():
-    os.makedirs("data", exist_ok=True)
+    if is_sqlite() and _SQLITE_PATH:
+        directory = os.path.dirname(_SQLITE_PATH)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
     with _INIT_LOCK:
         with engine.begin() as conn:
             # Create events table with the full schema (works on SQLite and Postgres)
@@ -171,7 +140,6 @@ def init_db():
                     """
                 )
             )
-
 
 def write_event(row: dict):
     """Insert a log row. Known columns go to dedicated fields; everything else is packed into extra_json.
@@ -391,17 +359,17 @@ def purge_old_events(older_than_days: int = 90) -> dict:
 
 def vacuum_if_needed(min_mb: int = 100) -> bool:
     """VACUUM the SQLite file if size exceeds threshold. No-op for non-SQLite URLs."""
-    if not (_DB and isinstance(_DB, str) and os.path.isfile(_DB)):
+    if not (is_sqlite() and _SQLITE_PATH and os.path.isfile(_SQLITE_PATH)):
         return False
     try:
-        size_mb = os.path.getsize(_DB) / (1024 * 1024)
+        size_mb = os.path.getsize(_SQLITE_PATH) / (1024 * 1024)
     except Exception:
         return False
     if size_mb < min_mb:
         return False
     # VACUUM must run outside an open transaction
     try:
-        with sqlite3.connect(_DB) as c:
+        with sqlite3.connect(_SQLITE_PATH) as c:
             c.isolation_level = None
             c.execute("VACUUM")
         return True
