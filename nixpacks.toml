@@ -6,7 +6,7 @@ nixPkgs = ["python311Full", "nodejs_20"]
 cmds = ["...", "npm --prefix web ci"]
 
 [phases.build]
-cmds = "npm --prefix web run build",
+cmds = ["npm --prefix web run build",]
 
 
 [start]
