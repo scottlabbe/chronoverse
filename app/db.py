@@ -19,6 +19,13 @@ if not DATABASE_URL:
         "(or an explicit sqlite:/// path for local/testing)."
     )
 
+# Railway (and many hosted Postgres providers) supply URLs like
+# postgresql://user:pass@host/db, which defaults to the psycopg2 driver.
+# We vendor psycopg (the v3 driver), so transparently upgrade the URL
+# unless the caller already specified an explicit dialect.
+if DATABASE_URL.startswith("postgresql://") and "+" not in DATABASE_URL.split("://", 1)[0]:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+
 
 def _ensure_dir_for_sqlite(url: str) -> None:
     if not url.startswith("sqlite///") and not url.startswith("sqlite:///"):
