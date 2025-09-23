@@ -1,17 +1,15 @@
 [phases.setup]
-  nixPkgs = ["python311Full", "nodejs_20"]
+nixPkgs = ["python311Full", "nodejs_20"]
 
-  [phases.install]
-  cmds = [
-    "python3 -m pip install -r requirements.txt",
-    "npm --prefix web ci"
-  ]
+[phases.install]
+# Extend the default install steps (creates venv + pip install) and then run npm ci
+cmds = ["...", "npm --prefix web ci"]
 
-  [phases.build]
-  cmds = [
-    "npm --prefix web run build",
-    "PYTHONPATH=. python3 -m alembic upgrade head"
-  ]
+[phases.build]
+cmds = [
+  "npm --prefix web run build",
+  "PYTHONPATH=. python3 -m alembic upgrade head"
+]
 
-  [start]
-  cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
