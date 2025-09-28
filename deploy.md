@@ -14,7 +14,7 @@
 
 **Tasks**
 1) **Requirements lock**
-   - Ensure `requirements.txt` includes:
+   - Ensure `apps/backend/requirements.txt` includes:
      - `fastapi`, `uvicorn[standard]`, `python-dotenv` (if used)
      - `SQLAlchemy>=2`, `alembic`
      - **Choose one**: `psycopg[binary]>=3.1,<3.3` **or** `psycopg2-binary`
@@ -23,15 +23,15 @@
 2) **Repo scripts**
    - Add a simple Makefile (optional but helpful):
      ```
-     build-frontend: ; npm --prefix web ci && npm --prefix web run build
-     db-upgrade: ; PYTHONPATH=. python -m alembic upgrade head
-     dev: ; uvicorn app.main:app --reload
+     build-frontend: ; npm --prefix apps/web ci && npm --prefix apps/web run build
+     db-upgrade: ; PYTHONPATH=apps/backend python -m alembic --config apps/backend/alembic.ini upgrade head
+     dev: ; PYTHONPATH=apps/backend uvicorn app.main:app --reload
      ```
 3) **CORS / Allowed origins**
    - In backend config, add your future Railway domain to allowed origins (we’ll plug the exact URL later).
 4) **PWA shell assets**
-   - Keep `web/public/manifest.webmanifest` + icons in sync with brand colors.
-   - After `npm --prefix web run build`, verify `sw.js` and `manifest.webmanifest` exist in `web/build/` and load over HTTPS.
+   - Keep `apps/web/public/manifest.webmanifest` + icons in sync with brand colors.
+   - After `npm --prefix apps/web run build`, verify `sw.js` and `manifest.webmanifest` exist in `apps/web/dist/` and load over HTTPS.
    - `make build-frontend` runs inside the `web-build` Docker Compose service (Node 20/Linux) so local builds match Railway.
 
 **Acceptance**
@@ -56,12 +56,12 @@
    - Frontend (build-time): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
 3) **Build command**
    ```
-   pip install -r requirements.txt && npm --prefix web ci
-   npm --prefix web run build && PYTHONPATH=. python -m alembic upgrade head
+   pip install -r apps/backend/requirements.txt && npm --prefix apps/web ci
+   npm --prefix apps/web run build && PYTHONPATH=apps/backend python -m alembic --config apps/backend/alembic.ini upgrade head
    ```
 4) **Start command**
    ```
-   uvicorn app.main:app --host 0.0.0.0 --port $PORT
+  PYTHONPATH=apps/backend uvicorn app.main:app --host 0.0.0.0 --port $PORT
    ```
 5) **Supabase redirect URLs**
    - Add your Railway domain to Supabase Auth redirect URLs and allowed origins.

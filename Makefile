@@ -5,20 +5,23 @@ ENV_FILE ?= .env
 DOCKER_COMPOSE ?= docker compose
 
 build-frontend:
-	rm -rf web/build
+	rm -rf apps/web/dist apps/web/build
 	$(DOCKER_COMPOSE) run --rm --no-deps web-build npm install
 	$(DOCKER_COMPOSE) run --rm --no-deps web-build npm run build
 
 db-upgrade:
-	PYTHONPATH=. python -m alembic upgrade head
+	PYTHONPATH=apps/backend python -m alembic --config apps/backend/alembic.ini upgrade head
 
 dev:
-	uvicorn app.main:app --reload --env-file $(ENV_FILE)
+	PYTHONPATH=apps/backend uvicorn app.main:app --reload --env-file $(ENV_FILE)
 
 fmt:
 	python -m pip install ruff black --quiet || true
 	ruff check --fix .
 	black .
+
+export-openapi:
+	python scripts/export_openapi.py
 
 # --- Local Postgres via Docker Compose ---
 pg-up:

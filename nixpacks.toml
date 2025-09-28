@@ -3,11 +3,11 @@ nixPkgs = ["python311Full", "nodejs_20"]
 
 [phases.install]
 # Extend the default install steps (creates venv + pip install) and then run npm ci
-cmds = ["...", "npm --prefix web install"]
+cmds = ["...", "npm --prefix apps/web install"]
 
 [phases.build]
-cmds = ["npm --prefix web run build",]
+cmds = ["npm --prefix apps/web run build",]
 
 
 [start]
-cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+cmd = "PYTHONPATH=apps/backend uvicorn app.main:app --host 0.0.0.0 --port $PORT"

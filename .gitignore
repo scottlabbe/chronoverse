@@ -52,6 +52,12 @@ logs/
 *.log
 
 # ---- Node / Vite (frontend)
+apps/web/node_modules/
+apps/web/dist/
+apps/web/build/
+apps/web/.vite/
+apps/web/.eslintcache
+apps/web/coverage/
 web/node_modules/
 web/dist/
 web/build/
@@ -63,3 +69,4 @@ web/coverage/
 # ---- Misc temp
 tmp/
 temp/
+.tmp/

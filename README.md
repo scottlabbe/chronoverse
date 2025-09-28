@@ -1,4 +1,4 @@
-# ChronoVerse
+# The Present Verse
 
 Minimalist, living “time poems.” Each visit (or minute) generates a short poem that *includes the current time*, in a chosen tone, without AM/PM or timezone names. Built with FastAPI + Vite/React, powered by OpenAI GPT-5 models via the **Responses API**.
 
@@ -20,41 +20,42 @@ Minimalist, living “time poems.” Each visit (or minute) generates a short po
 ## Project Structure
 
 ```
-chronoverse/
-├─ app/
-│  ├─ main.py                  # FastAPI app factory & CORS
-│  ├─ routes/
-│  │  └─ poems.py              # POST /api/poem
-│  ├─ services/
-│  │  └─ poem_service.py       # prompt building, cache, orchestration, cost calc
-│  ├─ adapters/
-│  │  └─ registry.py           # OpenAI adapter (Responses API) + robust text extraction
-│  ├─ core/
-│  │  └─ config.py             # pydantic-settings
-│  ├─ data/
-│  │  ├─ events.py             # Events/usage logging helpers (SQLAlchemy)
-│  │  └─ subscriptions.py      # Subscription persistence helpers
-│  └─ core/
-│     └─ types.py              # Pydantic request/response types (PoemRequest/PoemResponse)
-├─ web/
-│  ├─ index.html
-│  ├─ vite.config.ts
-│  ├─ package.json
-│  └─ src/
-│     ├─ main.tsx              # routes: "/" (Home) and "/app" (poem app)
-│     ├─ pages/
-│     │  └─ Home.tsx           # landing page with corner micro‑nav (version/theme)
-│     ├─ App.tsx               # main poem app (timer, tone selector, presentation)
-│     ├─ components/
-│     │  └─ ControlsRail.tsx   # minimal corner menu (present, billing, sign out)
-│     ├─ lib/
-│     │  ├─ api.ts             # client for /api endpoints
-│     │  └─ supabase.ts        # Supabase client (auth)
-│     └─ styles/
-│        └─ globals.css        # responsive typography, presentation sizing
-├─ .env                        # environment variables (see below)
-├─ requirements.txt
-├─ .gitignore
+present-verse/
+├─ apps/
+│  ├─ backend/
+│  │  ├─ app/
+│  │  │  ├─ main.py              # FastAPI app, auth, CORS, static hosting
+│  │  │  ├─ routes/
+│  │  │  │  └─ poems.py          # POST /api/poem (web) and /api/v2/poem (mobile)
+│  │  │  ├─ services/
+│  │  │  │  └─ poem_service.py   # prompt building, cache, orchestration, cost calc
+│  │  │  ├─ adapters/
+│  │  │  │  └─ registry.py       # OpenAI adapter (Responses API) + robust text extraction
+│  │  │  ├─ core/
+│  │  │  │  └─ config.py         # pydantic-settings + shared env helpers
+│  │  │  ├─ data/                # events & subscription persistence (SQLAlchemy)
+│  │  │  └─ core/types.py        # Pydantic request/response types
+│  │  ├─ requirements.txt
+│  │  └─ alembic.ini
+│  ├─ web/
+│  │  ├─ index.html
+│  │  ├─ package.json
+│  │  ├─ vite.config.ts
+│  │  └─ src/                    # React + TypeScript app
+│  └─ ios/
+│     └─ README.md               # SwiftUI placeholder (initialize Xcode project here)
+├─ packages/
+│  └─ shared-schemas/
+│     ├─ README.md
+│     └─ openapi.json            # Exported FastAPI spec for clients (iOS, web, external)
+├─ scripts/
+│  ├─ db_status.py
+│  └─ export_openapi.py          # `python scripts/export_openapi.py`
+├─ infra/
+│  └─ README.md                  # Deployment templates & env notes
+├─ Makefile
+├─ docker-compose.yml
+├─ .env (local overrides)
 └─ README.md
 ```
 
@@ -69,7 +70,7 @@ docker compose run --rm --no-deps web-build npm install
 docker compose run --rm --no-deps web-build npm run build
 ```
 
-Dependencies installed in the container stay in the named Docker volume (`web-build-node_modules`), so your host setup remains untouched. If you prefer to run the Vite dev server on macOS directly, run `npm --prefix web install` after the container install finishes.
+Dependencies installed in the container stay in the named Docker volume (`web-build-node_modules`), so your host setup remains untouched. If you prefer to run the Vite dev server on macOS directly, run `npm --prefix apps/web install` after the container install finishes.
 
 ---
 
@@ -112,7 +113,7 @@ POST /api/poem
   "completion_tokens": 41,
   "reasoning_tokens": 0,
   "cost_usd": 0.000024,
-  "request_id": "cv_xxx",
+  "request_id": "pv_xxx",
   "response_id": "resp_xxx",
   "retry_count": 0,
   "params_used": { "verbosity": "low", "reasoning_effort": "minimal" },
@@ -185,10 +186,10 @@ Enable `ADAPTER_DEBUG=1` to log a compact structural peek so you can see exactly
   - Sans: `ui-sans-serif, system-ui, sans-serif`
 
 ### Client preferences (localStorage)
-- `cv:tone` → current poem tone (App)
-- `cv:auto` → auto-refresh enabled flag (App; default ON)
-- `cv:version` → version: Gallery | Manuscript | Zen (Home + App)
-- `cv:theme` → theme: Paper | Stone | Ink | Slate | Mist (Home + App)
+- `pv:tone` → current poem tone (App)
+- `pv:auto` → auto-refresh enabled flag (App; default ON)
+- `pv:version` → version: Gallery | Manuscript | Zen (Home + App)
+- `pv:theme` → theme: Paper | Stone | Ink | Slate | Mist (Home + App)
 
 ---
 
@@ -199,9 +200,9 @@ Enable `ADAPTER_DEBUG=1` to log a compact structural peek so you can see exactly
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r apps/backend/requirements.txt
 export DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5433/postgres
-uvicorn app.main:app --reload
+PYTHONPATH=apps/backend uvicorn app.main:app --reload
 # Swagger UI:
 # http://127.0.0.1:8000/docs
 ```
@@ -215,16 +216,16 @@ another database or credentials.
 Use a platform-agnostic setup (avoid platform-specific devDependencies like `@rollup/rollup-darwin-arm64`).
 
 ```bash
-cd web
+cd apps/web
 npm install
 npm run dev
 # Dev server will print a local URL
 ```
 
-Frontend env (Vite) is read from `web/.env*` files. For Supabase auth locally, set:
+Frontend env (Vite) is read from `apps/web/.env*` files. For Supabase auth locally, set:
 
 ```bash
-# web/.env.local
+# apps/web/.env.local
 VITE_SUPABASE_URL=...      # from your Supabase project settings
 VITE_SUPABASE_ANON_KEY=... # public anon key
 VITE_API_BASE=/api         # default; dev proxy maps /api → http://127.0.0.1:8000
@@ -241,7 +242,7 @@ If a previous `package.json` contained platform-specific packages (e.g., `@rollu
 
 ```dotenv
 # Required (Backend)
-DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/chronoverse
+DATABASE_URL=postgresql+psycopg://postgres:postgres@127.0.0.1:5432/presentverse
 # For quick local testing you can point to sqlite:///path/to.db, but production uses Postgres.
 OPENAI_API_KEY=sk-...
 SUPABASE_JWT_JWKS_URL=https://<project-ref>.supabase.co/auth/v1/jwks
@@ -272,7 +273,7 @@ DAILY_COST_LIMIT_USD=0.50
 # Dev:
 CORS_ORIGINS=http://localhost:5173
 # Prod example:
-# CORS_ORIGINS=["https://chronoverse.app","https://www.chronoverse.app"]
+# CORS_ORIGINS=["https://presentverse.app","https://www.presentverse.app"]
 ENABLE_SWAGGER=0
 
 # GPT-5 Responses API controls (strings)
@@ -289,6 +290,9 @@ PRICE_COMPLETION_gpt-5-mini=2.00
 # Rate limiting (optional; sensible defaults are built-in)
 USER_RL_PER_MIN=6
 IP_RL_PER_MIN=60
+# Mobile API (iOS dev lane)
+MOBILE_API_KEYS=dev-mobile-key-override
+MOBILE_RL_PER_MIN=60
 # Shared cache/limiter (optional): if not set, falls back to in-memory
 # REDIS_URL=redis://localhost:6379/0
 
@@ -372,8 +376,24 @@ curl -s -X POST 'http://127.0.0.1:8000/api/poem' \
   -d '{"tone":"Wistful","timezone":"America/Chicago","format":"12h"}' | jq .
 ```
 
+**cURL (mobile `/api/v2/poem` with an API key):**
+```bash
+MOBILE_KEY="dev-mobile-key-override"
+curl -s -X POST 'http://127.0.0.1:8000/api/v2/poem' \
+  -H "X-Mobile-Api-Key: $MOBILE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"tone":"Wistful","timezone":"America/Chicago","format":"12h"}' | jq .
+```
+
 **Swagger:**  
 If `ENABLE_SWAGGER=1`, open `http://127.0.0.1:8000/docs` and use the `POST /api/poem` operation interactively.
+
+---
+
+## Shared Schemas
+
+- `packages/shared-schemas/openapi.json` is the canonical contract for web/iOS clients.
+- Regenerate after backend changes: `python scripts/export_openapi.py` (requires backend dependencies).
 
 ---
 
@@ -453,9 +473,9 @@ Then restart the server. To ensure you bypass cache, hit the API with `"forceNew
 ```bash
 git init
 git add .
-git commit -m "Initial ChronoVerse"
+git commit -m "Initial Present Verse"
 git branch -M main
-git remote add origin git@github.com:scottlabbe/chronoverse.git
+git remote add origin git@github.com:scottlabbe/presentverse.git
 git push -u origin main
 ```
 

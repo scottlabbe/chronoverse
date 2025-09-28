@@ -21,7 +21,7 @@ services:
     profiles:
       - build
     volumes:
-      - ./web:/app
+      - ./apps/web:/app
       - web-build-node_modules:/app/node_modules
       - web-build-npm-cache:/root/.npm
 
