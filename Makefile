@@ -2,11 +2,12 @@
 .PHONY: build-frontend db-upgrade dev fmt pg-up pg-down pg-logs pg-psql db-status
 
 ENV_FILE ?= .env
+DOCKER_COMPOSE ?= docker compose
 
 build-frontend:
 	rm -rf web/build
-	npm --prefix web install
-	npm --prefix web run build
+	$(DOCKER_COMPOSE) run --rm --no-deps web-build npm install
+	$(DOCKER_COMPOSE) run --rm --no-deps web-build npm run build
 
 db-upgrade:
 	PYTHONPATH=. python -m alembic upgrade head

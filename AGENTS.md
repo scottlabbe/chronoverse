@@ -20,6 +20,17 @@ cp .env.dev .env  # edit values
 make build-frontend && make dev
 ```
 
+`make build-frontend` runs inside the `web-build` Docker Compose service (Node 20 on Debian) so local builds match Railway. Ensure Docker Desktop is running before invoking it.
+
+To run ad-hoc npm commands in the same environment:
+
+```
+docker compose run --rm --no-deps web-build npm install
+docker compose run --rm --no-deps web-build npm run build
+```
+
+Container installs live in the `web-build-node_modules` Docker volume, so the host `web/node_modules` isn’t touched. If you want to run the Vite dev server directly on macOS, follow up with `npm --prefix web install` in your local shell.
+
 ## Coding Style & Naming Conventions
 - Python: 4-space indent, type hints encouraged. Run `make fmt` before commits (Ruff + Black).
 - TS/React: follow existing patterns in `web/src`, PascalCase components in `components/`, kebab-case files for non-components.

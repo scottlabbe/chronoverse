@@ -7,6 +7,9 @@ import Terms from "./pages/legal/Terms";
 import Privacy from "./pages/legal/Privacy";
 import "./index.css";
 import "./styles/globals.css";
+import registerServiceWorker from "./lib/registerServiceWorker";
+
+registerServiceWorker();
 
 const el = document.getElementById("root");
 if (!el) throw new Error("Root element #root not found");

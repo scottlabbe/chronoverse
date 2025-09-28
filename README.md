@@ -58,6 +58,19 @@ chronoverse/
 └─ README.md
 ```
 
+### Frontend build environment
+
+`make build-frontend` runs inside the Docker Compose service `web-build`, which uses Node 20 on Debian so local builds match Railway. Ensure Docker Desktop is running before invoking it.
+
+Need an ad-hoc command? Run it through the same containerized environment:
+
+```
+docker compose run --rm --no-deps web-build npm install
+docker compose run --rm --no-deps web-build npm run build
+```
+
+Dependencies installed in the container stay in the named Docker volume (`web-build-node_modules`), so your host setup remains untouched. If you prefer to run the Vite dev server on macOS directly, run `npm --prefix web install` after the container install finishes.
+
 ---
 
 ## Backend Overview
@@ -435,29 +448,6 @@ Then restart the server. To ensure you bypass cache, hit the API with `"forceNew
 
 ---
 
-## Git & .gitignore
-
-Example `.gitignore` (already included):
-```
-# Python
-.venv/
-__pycache__/
-*.pyc
-
-# Node
-web/node_modules/
-web/.vite/
-web/dist/
-
-# Env & data
-.env
-data/*.db
-export/
-
-# OS / editor
-.DS_Store
-.vscode/
-```
 
 **Create repo & push:**
 ```bash
@@ -471,11 +461,6 @@ git push -u origin main
 
 ---
 
-## Deployment
-
-- **Replit / simple VM**: run FastAPI with `uvicorn`; build the frontend (`npm --prefix web run build`) so FastAPI can serve `web/build` as static assets, or keep the Vite dev server behind a reverse proxy for local-only workflows
-- Ensure `OPENAI_API_KEY` & other envs are set securely
-- Consider a small process manager (e.g., `pm2`, `systemd`) for `uvicorn`
 
 ### Security & Runtime Notes
 - Authentication: All API routes use Supabase JWT (RS256 via JWKS or HS256 via secret). Set `SUPABASE_ISS` to pin issuer.

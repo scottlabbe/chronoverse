@@ -207,6 +207,17 @@ if STATIC_DIR and os.path.isdir(os.path.join(STATIC_DIR, "assets")):
         name="assets",
     )
 INDEX_PATH = os.path.join(STATIC_DIR, "index.html") if STATIC_DIR else None
+MANIFEST_PATH = (
+    os.path.join(STATIC_DIR, "manifest.webmanifest") if STATIC_DIR else None
+)
+SW_PATH = os.path.join(STATIC_DIR, "sw.js") if STATIC_DIR else None
+
+
+def _file_response(path: str, *, media_type: str | None = None, cache_control: str | None = None):
+    headers = {}
+    if cache_control:
+        headers["Cache-Control"] = cache_control
+    return FileResponse(path, media_type=media_type, headers=headers)
 
 cfg = get_settings()
 app.add_middleware(
@@ -247,6 +258,25 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+@app.get("/manifest.webmanifest")
+async def manifest():
+    if MANIFEST_PATH and os.path.exists(MANIFEST_PATH):
+        return _file_response(
+            MANIFEST_PATH,
+            media_type="application/manifest+json",
+            cache_control="no-cache, max-age=0",
+        )
+    return Response(status_code=404)
+
+
+@app.get("/sw.js")
+@app.get("/service-worker.js")
+async def service_worker():
+    if SW_PATH and os.path.exists(SW_PATH):
+        return _file_response(SW_PATH, cache_control="no-cache, max-age=0")
+    return Response(status_code=404)
 
 
 @app.get("/api/me")
@@ -603,6 +633,15 @@ async def spa(full_path: str):
     # Do not intercept API or well-known public paths we might add later
     if full_path.startswith("api/"):
         return Response(status_code=404)
+    if STATIC_DIR and full_path:
+        safe = os.path.normpath(full_path)
+        if not safe.startswith(".."):
+            candidate = os.path.join(STATIC_DIR, safe)
+            if os.path.isfile(candidate):
+                cache_control = None
+                if candidate.endswith(".webmanifest") or os.path.basename(candidate) in {"sw.js", "service-worker.js"}:
+                    cache_control = "no-cache, max-age=0"
+                return _file_response(candidate, cache_control=cache_control)
     return _index_response()
 
 

@@ -29,6 +29,10 @@
      ```
 3) **CORS / Allowed origins**
    - In backend config, add your future Railway domain to allowed origins (we’ll plug the exact URL later).
+4) **PWA shell assets**
+   - Keep `web/public/manifest.webmanifest` + icons in sync with brand colors.
+   - After `npm --prefix web run build`, verify `sw.js` and `manifest.webmanifest` exist in `web/build/` and load over HTTPS.
+   - `make build-frontend` runs inside the `web-build` Docker Compose service (Node 20/Linux) so local builds match Railway.
 
 **Acceptance**
 - `make build-frontend && make db-upgrade && make dev` works locally.
