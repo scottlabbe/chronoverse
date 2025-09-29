@@ -181,7 +181,13 @@ async def post_poem_mobile(
     client_ip = (fwd.split(",")[0].strip() if fwd else None) or (
         request.client.host if request.client else None
     )
-    if not await allow_ip(client_ip):
+    bypass_ip_limit = os.getenv("MOBILE_SKIP_IP_LIMIT", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if not bypass_ip_limit and not await allow_ip(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={"reason": "rate_limited_ip", "retry": 60},

@@ -293,6 +293,7 @@ IP_RL_PER_MIN=60
 # Mobile API (iOS dev lane)
 MOBILE_API_KEYS=dev-mobile-key-override
 MOBILE_RL_PER_MIN=60
+MOBILE_SKIP_IP_LIMIT=0
 # Shared cache/limiter (optional): if not set, falls back to in-memory
 # REDIS_URL=redis://localhost:6379/0
 
