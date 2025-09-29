@@ -16,6 +16,7 @@ from app.services.rate_limit import allow_user, allow_ip, allow_token
 import hashlib
 import hmac
 import uuid
+import os
 from app.data.events import record_usage_minute, monthly_usage_minutes, write_event
 from app.data.subscriptions import is_subscribed
 
